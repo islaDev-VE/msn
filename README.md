@@ -4,7 +4,9 @@
 
 ![MSN 7.5 Preview](https://img.shields.io/badge/MSN_Messenger-7.5_XP-0055ea?style=for-the-badge&logo=windows-xp&logoColor=white)
 ![Windows XP](https://img.shields.io/badge/Windows_XP-Luna_Blue-388e3c?style=for-the-badge)
-![Real-Time](https://img.shields.io/badge/Socket.io-Multijugador-black?style=for-the-badge)
+![GitHub Pages](https://img.shields.io/badge/GitHub_Pages-En_Vivo-2ea44f?style=for-the-badge&logo=github)
+
+🔗 **Pruébalo en vivo aquí:** [https://isladev-ve.github.io/msn/](https://isladev-ve.github.io/msn/)
 
 ---
 
