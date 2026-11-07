@@ -1,0 +1,455 @@
+/* ========================================================
+   WINDOWS XP LUNA BLUE & SYSTEM STYLESHEET
+   Accurate 2005 Windows XP desktop, window frames, taskbar
+   ======================================================== */
+
+:root {
+  --xp-blue-dark: #0055ea;
+  --xp-blue-main: #245edb;
+  --xp-blue-light: #5389ef;
+  --xp-titlebar-start: #0058ee;
+  --xp-titlebar-end: #3d88f6;
+  --xp-taskbar: #245edb;
+  --xp-tray-bg: #0c8ee0;
+  --xp-start-green: #388e3c;
+  --xp-window-bg: #ece9d8;
+  --xp-border-color: #0055ea;
+  --xp-button-face: #ece9d8;
+  --xp-font: 'Tahoma', 'Segoe UI', Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+body, html, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--xp-font);
+  font-size: 11px;
+  background-color: #004e98;
+}
+
+/* ========================================================
+   DESKTOP & BLISS BACKGROUND
+   ======================================================== */
+.xp-desktop {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+  /* Authentic CSS representation of Bliss Rolling Hills */
+  background: 
+    radial-gradient(ellipse at 70% 30%, rgba(255, 255, 255, 0.4) 0%, transparent 40%),
+    linear-gradient(to bottom, 
+      #3a88e9 0%, 
+      #6db3f2 28%, 
+      #c4e0e5 45%, 
+      #5c9e31 52%, 
+      #42871b 68%, 
+      #367015 100%
+    );
+  background-size: cover;
+}
+
+/* Bliss ambient sun & hills graphic overlay */
+.bliss-hills-overlay {
+  position: absolute;
+  bottom: 30px;
+  left: 0;
+  right: 0;
+  height: 45%;
+  pointer-events: none;
+  background: radial-gradient(ellipse 110% 80% at 30% 100%, #589c25 0%, #3e8117 60%, transparent 80%),
+              radial-gradient(ellipse 120% 70% at 80% 100%, #68b32e 0%, #4a911e 65%, transparent 85%);
+  opacity: 0.85;
+}
+
+/* ========================================================
+   WINDOWS XP TASKBAR & START BUTTON
+   ======================================================== */
+.xp-taskbar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  background: linear-gradient(to bottom, #1f2f86 0%, #316ac5 3%, #245edb 10%, #1941a5 100%);
+  border-top: 1px solid #5389ef;
+  display: flex;
+  align-items: center;
+  z-index: 9999;
+  box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.xp-start-btn {
+  height: 30px;
+  padding: 0 16px 0 8px;
+  background: linear-gradient(to bottom, #388e3c 0%, #5cb85c 12%, #3c763d 85%, #2b542c 100%);
+  border: none;
+  border-top-right-radius: 9px;
+  border-bottom-right-radius: 9px;
+  color: #ffffff;
+  font-family: 'Trebuchet MS', var(--xp-font);
+  font-size: 14px;
+  font-weight: bold;
+  font-style: italic;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 2px 0 4px rgba(0, 0, 0, 0.35);
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  transition: filter 0.1s;
+}
+
+.xp-start-btn:hover {
+  filter: brightness(1.1);
+}
+
+.xp-start-btn:active {
+  background: linear-gradient(to bottom, #2b542c 0%, #3c763d 15%, #449d44 90%, #388e3c 100%);
+}
+
+.xp-windows-flag {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.xp-taskbar-tasks {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.xp-taskbar-item {
+  height: 24px;
+  min-width: 140px;
+  max-width: 180px;
+  padding: 0 8px;
+  background: linear-gradient(to bottom, #3b74e6 0%, #2960d7 50%, #1f4bb7 100%);
+  border: 1px solid #14358a;
+  border-radius: 3px;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.xp-taskbar-item.active {
+  background: linear-gradient(to bottom, #173887 0%, #19449f 50%, #2358c2 100%);
+  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.6);
+  border-color: #0b1d4c;
+}
+
+.xp-taskbar-item:hover:not(.active) {
+  background: linear-gradient(to bottom, #4f85ee 0%, #356ce0 50%, #2b59c9 100%);
+}
+
+.xp-systray {
+  height: 100%;
+  padding: 0 10px;
+  background: linear-gradient(to bottom, #0c8ee0 0%, #0970b4 40%, #064c84 100%);
+  border-left: 1px solid #165691;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffffff;
+  font-size: 11px;
+  box-shadow: inset 1px 0 1px rgba(255, 255, 255, 0.3);
+}
+
+.xp-tray-icon {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* ========================================================
+   WINDOWS XP WINDOW FRAME
+   ======================================================== */
+.xp-window {
+  position: absolute;
+  background-color: var(--xp-window-bg);
+  border: 3px solid var(--xp-border-color);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: transform 0.05s ease;
+}
+
+.xp-window.focused {
+  border-color: var(--xp-blue-dark);
+  box-shadow: 3px 5px 16px rgba(0, 0, 0, 0.5);
+}
+
+.xp-window.inactive {
+  border-color: #7697d9;
+}
+
+.xp-window-titlebar {
+  height: 28px;
+  background: linear-gradient(to bottom, 
+    #0058ee 0%, 
+    #3593ff 6%, 
+    #288eff 12%, 
+    #1277ef 25%, 
+    #0865e2 50%, 
+    #0353d6 90%, 
+    #0042bd 100%
+  );
+  padding: 0 5px 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: grab;
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
+}
+
+.xp-window.inactive .xp-window-titlebar {
+  background: linear-gradient(to bottom, #7697d9 0%, #8caee8 15%, #6487cb 85%, #5071b0 100%);
+}
+
+.xp-window-title {
+  color: #ffffff;
+  font-weight: bold;
+  font-size: 12px;
+  text-shadow: 1px 1px 2px #001e6a;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xp-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.xp-control-btn {
+  width: 21px;
+  height: 21px;
+  border-radius: 3px;
+  border: 1px solid #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 11px;
+  line-height: 1;
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.xp-btn-min, .xp-btn-max {
+  background: linear-gradient(to bottom, #428bf6 0%, #1562e8 50%, #0348c5 100%);
+  border-color: #ffffff;
+}
+
+.xp-btn-min:hover, .xp-btn-max:hover {
+  background: linear-gradient(to bottom, #609ff8 0%, #2574f5 50%, #1159d9 100%);
+}
+
+.xp-btn-close {
+  background: linear-gradient(to bottom, #f27265 0%, #e83323 50%, #bf1305 100%);
+  border-color: #ffffff;
+  font-size: 12px;
+}
+
+.xp-btn-close:hover {
+  background: linear-gradient(to bottom, #ff8a7d 0%, #f54334 50%, #d41808 100%);
+}
+
+.xp-window-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--xp-window-bg);
+}
+
+/* ========================================================
+   XP MENUBAR
+   ======================================================== */
+.xp-menubar {
+  height: 22px;
+  background: #ece9d8;
+  border-bottom: 1px solid #d4d0c8;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+}
+
+.xp-menu-item {
+  padding: 2px 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 2px;
+}
+
+.xp-menu-item:hover {
+  border-color: #316ac5;
+  background-color: #c1d2ee;
+}
+
+/* ========================================================
+   RETRO CONTROLS (BUTTONS, INPUTS)
+   ======================================================== */
+.xp-btn {
+  font-family: var(--xp-font);
+  font-size: 11px;
+  padding: 3px 12px;
+  background: linear-gradient(to bottom, #ffffff 0%, #ece9d8 15%, #d8d4c4 90%, #c4c0b0 100%);
+  border: 1px solid #003c74;
+  border-radius: 3px;
+  color: #000000;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.xp-btn:hover {
+  background: linear-gradient(to bottom, #fff8e8 0%, #fae2b4 15%, #f5cb7b 90%, #dfa843 100%);
+  border-color: #e59700;
+}
+
+.xp-btn:active {
+  background: linear-gradient(to bottom, #c4c0b0 0%, #d8d4c4 85%, #ece9d8 100%);
+  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.xp-btn-primary {
+  border-color: #0055ea;
+  font-weight: bold;
+}
+
+.xp-input {
+  font-family: var(--xp-font);
+  font-size: 11px;
+  padding: 3px 6px;
+  background: #ffffff;
+  border: 1px solid #7f9db9;
+  border-radius: 1px;
+  outline: none;
+  box-shadow: inset 1px 1px 1px rgba(0, 0, 0, 0.15);
+}
+
+.xp-input:focus {
+  border-color: #0055ea;
+}
+
+/* ========================================================
+   ZUMBIDO SHAKE ANIMATION
+   ======================================================== */
+@keyframes msn-shake {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  10% { transform: translate(-8px, -6px) rotate(-1.5deg); }
+  20% { transform: translate(8px, 6px) rotate(1.5deg); }
+  30% { transform: translate(-8px, 5px) rotate(-1deg); }
+  40% { transform: translate(7px, -5px) rotate(1deg); }
+  50% { transform: translate(-6px, 4px) rotate(-0.5deg); }
+  60% { transform: translate(6px, -4px) rotate(0.5deg); }
+  70% { transform: translate(-4px, 3px) rotate(-0.5deg); }
+  80% { transform: translate(4px, -3px) rotate(0.5deg); }
+  90% { transform: translate(-2px, 2px) rotate(0deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+.shake-nudge {
+  animation: msn-shake 0.55s cubic-bezier(.36,.07,.19,.97) both;
+}
+
+/* ========================================================
+   TOASTER POPUP (MSN XP BOTTOM RIGHT NOTIFICATION)
+   ======================================================== */
+@keyframes msn-toaster-slide {
+  0% { transform: translateY(110%); opacity: 0; }
+  15% { transform: translateY(0); opacity: 1; }
+  85% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(110%); opacity: 0; }
+}
+
+.msn-toaster {
+  position: fixed;
+  bottom: 38px;
+  right: 16px;
+  width: 220px;
+  background: linear-gradient(to bottom, #dbe8fc 0%, #b8d4f8 20%, #9bc2f5 100%);
+  border: 2px solid #5a87d6;
+  border-radius: 6px 6px 0 0;
+  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.4);
+  padding: 8px 10px;
+  z-index: 10000;
+  cursor: pointer;
+  animation: msn-toaster-slide 6s ease forwards;
+}
+
+.msn-toaster-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #7da6ea;
+  padding-bottom: 4px;
+  margin-bottom: 6px;
+}
+
+.msn-toaster-title {
+  color: #0b3e8c;
+  font-weight: bold;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.msn-toaster-body {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.msn-toaster-avatar {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #4a74b9;
+  border-radius: 2px;
+  background-color: #ffffff;
+}
+
+.msn-toaster-text {
+  color: #1a3b68;
+  font-size: 11px;
+}
+
+.msn-toaster-nickname {
+  font-weight: bold;
+  color: #003399;
+}
