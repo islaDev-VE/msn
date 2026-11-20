@@ -1,369 +1,476 @@
-import React, { useState } from 'react';
-import { getAvatarSvg, RETRO_AVATARS } from '../../services/avatars';
-import { MSN_STATUSES } from '../../services/statusHelper';
-import { parseTextWithEmoticons } from '../../services/emoticons';
+import React, { useState, useEffect } from 'react';
+import DraggableWindow from '../Common/DraggableWindow';
+import ZumbidoLogo from '../Common/ZumbidoLogo';
+import { AvatarView } from '../../services/avatars';
+import { USER_STATUSES, formatLastSeen } from '../../services/statusHelper';
+import { renderFormattedText, stripPlusTags } from '../../services/plusFormatter';
+
+const DEFAULT_GROUPS = ['Amigos', 'Familia', 'Trabajo'];
 
 export default function ContactListWindow({
   profile,
   onUpdateProfile,
-  roomUsers,
-  roomId,
+  friends = [],
+  incomingRequests = [],
   onOpenChat,
-  onOpenInvite,
+  onOpenAddFriend,
+  onOpenProfileModal,
+  onOpenAbout,
+  onMoveFriendGroup,
+  onToggleBlockFriend,
+  onRemoveFriend,
+  onInstallPwa,
+  canInstallPwa,
+  notificationPermission,
+  onRequestNotifications,
+  onLogout,
   onMinimize,
-  onClose,
   isFocused,
-  onFocus
+  zIndex,
+  onFocus,
+  isMobile,
+  mobileSection = 'contacts' // 'contacts' | 'chats' | 'profile'
 }) {
-  const [activeTab, setActiveTab] = useState('contacts');
-  const [onlineCollapsed, setOnlineCollapsed] = useState(false);
-  const [offlineCollapsed, setOfflineCollapsed] = useState(false);
   const [filterQuery, setFilterQuery] = useState('');
-  const [editingNick, setEditingNick] = useState(false);
-  const [nickValue, setNickValue] = useState(profile.nickname);
-  const [msgValue, setMsgValue] = useState(profile.personalMessage);
+  const [groupMode, setGroupMode] = useState('status'); // 'status' | 'group'
+  const [collapsedGroups, setCollapsedGroups] = useState({});
+  const [msgValue, setMsgValue] = useState(profile.personalMessage || '');
+  const [openMenuFriendId, setOpenMenuFriendId] = useState(null);
 
-  // Filter out self from buddy list
-  const otherUsers = roomUsers.filter((u) => u.socketId !== profile.socketId);
+  useEffect(() => {
+    setMsgValue(profile.personalMessage || '');
+  }, [profile.personalMessage]);
 
-  // Nostalgic offline buddies for authentic 2005 feel
-  const offlineBuddies = [
-    {
-      id: 'off-1',
-      nickname: '★_lA_cHiCa_EmO_2005_★',
-      email: 'dark_fairy@hotmail.com',
-      status: 'offline',
-      personalMessage: '(8) My Chemical Romance - Helena (8)',
-      avatar: 'guitar'
-    },
-    {
-      id: 'off-2',
-      nickname: '[xX_ProGamer_CS16_Xx]',
-      email: 'sniper_elite@msn.com',
-      status: 'offline',
-      personalMessage: 'Jugando dust2 no molestar',
-      avatar: 'soccer'
-    },
-    {
-      id: 'off-3',
-      nickname: '·#·$4♫ Solecito ♫·$',
-      email: 'mariposa_sol@hotmail.com',
-      status: 'offline',
-      personalMessage: 'vuelvo en un rato :P',
-      avatar: 'palm'
-    }
-  ];
+  useEffect(() => {
+    const closeMenu = () => setOpenMenuFriendId(null);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, []);
 
-  const handleAvatarClick = () => {
-    const currentIndex = RETRO_AVATARS.findIndex((a) => a.id === profile.avatar);
-    const nextIndex = (currentIndex + 1) % RETRO_AVATARS.length;
-    onUpdateProfile({ avatar: RETRO_AVATARS[nextIndex].id });
+  const toggleGroup = (key) => {
+    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const handleStatusChange = (e) => {
     onUpdateProfile({ status: e.target.value });
   };
 
-  const handleNickBlur = () => {
-    setEditingNick(false);
-    if (nickValue.trim()) {
-      onUpdateProfile({ nickname: nickValue.trim() });
-    } else {
-      setNickValue(profile.nickname);
+  const handleMsgSave = () => {
+    if (msgValue !== profile.personalMessage) {
+      onUpdateProfile({ personalMessage: msgValue });
     }
   };
 
-  const handleMsgBlur = () => {
-    onUpdateProfile({ personalMessage: msgValue });
+  const filteredFriends = friends.filter((f) => {
+    const q = filterQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      stripPlusTags(f.nickname).toLowerCase().includes(q) ||
+      f.email.toLowerCase().includes(q) ||
+      (f.groupName || '').toLowerCase().includes(q)
+    );
+  });
+
+  // Group contacts either by Online/Offline or by Custom Groups
+  const groupedSections = (() => {
+    if (groupMode === 'group') {
+      const map = new Map();
+      filteredFriends.forEach((f) => {
+        const g = f.groupName || 'Amigos';
+        if (!map.has(g)) map.set(g, []);
+        map.get(g).push(f);
+      });
+      return Array.from(map.entries()).map(([label, list]) => ({
+        key: `grp-${label}`,
+        label: `${label} (${list.filter((x) => x.isOnline).length}/${list.length})`,
+        items: list
+      }));
+    }
+
+    const online = filteredFriends.filter((f) => f.isOnline && !f.isBlocked);
+    const offline = filteredFriends.filter((f) => !f.isOnline || f.isBlocked);
+    return [
+      { key: 'online', label: `Conectados (${online.length})`, items: online },
+      { key: 'offline', label: `Sin conexión (${offline.length})`, items: offline }
+    ];
+  })();
+
+  const handleGroupPrompt = (friend) => {
+    setOpenMenuFriendId(null);
+    const next = window.prompt(
+      `Escribe el nombre del grupo para ${stripPlusTags(friend.nickname)} (ej. ${DEFAULT_GROUPS.join(', ')}):`,
+      friend.groupName || 'Amigos'
+    );
+    if (next && next.trim()) {
+      onMoveFriendGroup(friend.id, next.trim());
+    }
   };
 
-  const renderParsed = (text) => {
-    const parts = parseTextWithEmoticons(text || '');
-    return parts.map((p, idx) => {
-      if (p.type === 'emoticon') {
-        return (
-          <span key={idx} style={{ fontSize: 13, verticalAlign: 'middle', margin: '0 1px' }}>
-            {p.data.render}
-          </span>
-        );
-      }
-      return <span key={idx}>{p.value}</span>;
-    });
+  const handleDeleteConfirm = (friend) => {
+    setOpenMenuFriendId(null);
+    if (window.confirm(`¿Eliminar a ${stripPlusTags(friend.nickname)} de tu lista de contactos?`)) {
+      onRemoveFriend(friend.id);
+    }
+  };
+
+  const renderFriendRow = (friend) => (
+    <div
+      key={friend.id}
+      className={`z05-buddy-item ${friend.isOnline ? '' : 'offline'} ${friend.isBlocked ? 'blocked' : ''}`}
+      onDoubleClick={() => onOpenChat(friend)}
+      onClick={() => {
+        if (isMobile) onOpenChat(friend);
+      }}
+      title={isMobile ? 'Toca para chatear' : 'Doble clic para iniciar conversación'}
+    >
+      <div className="z05-buddy-mini-avatar">
+        <AvatarView avatar={friend.avatar} alt={stripPlusTags(friend.nickname)} />
+        <div
+          className="z05-buddy-status-dot"
+          dangerouslySetInnerHTML={{
+            __html: USER_STATUSES[friend.status]?.iconSvg || USER_STATUSES.offline.iconSvg
+          }}
+        />
+      </div>
+
+      <div className="z05-buddy-info">
+        <div className="z05-buddy-nickname">
+          {renderFormattedText(friend.nickname, `buddy-${friend.id}`)}
+          {friend.isBlocked && (
+            <span style={{ marginLeft: 5, fontSize: 10, color: '#c62828' }}>[Bloqueado]</span>
+          )}
+        </div>
+        <div className="z05-buddy-msg">
+          {friend.isOnline
+            ? (friend.personalMessage
+                ? renderFormattedText(friend.personalMessage, `msg-${friend.id}`)
+                : `${USER_STATUSES[friend.status]?.label || 'Conectado'} • ${friend.groupName}`)
+            : `${formatLastSeen(friend.lastSeen)} • ${friend.groupName}`}
+        </div>
+      </div>
+
+      <div className="z05-buddy-actions" onClick={(e) => e.stopPropagation()}>
+        {friend.unreadCount > 0 && (
+          <span className="z05-pill-badge">{friend.unreadCount}</span>
+        )}
+        <button
+          type="button"
+          className="z05-buddy-menu-btn"
+          title="Opciones de contacto"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpenMenuFriendId((prev) => (prev === friend.id ? null : friend.id));
+          }}
+        >
+          ⋮
+        </button>
+      </div>
+
+      {openMenuFriendId === friend.id && (
+        <div className="z05-contact-context" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="z05-context-item"
+            onClick={() => {
+              setOpenMenuFriendId(null);
+              onOpenChat(friend);
+            }}
+          >
+            💬 Enviar mensaje
+          </div>
+          <div className="z05-context-item" onClick={() => handleGroupPrompt(friend)}>
+            📁 Mover de grupo ({friend.groupName})
+          </div>
+          <div
+            className="z05-context-item"
+            onClick={() => {
+              setOpenMenuFriendId(null);
+              onToggleBlockFriend(friend.id, !friend.isBlocked);
+            }}
+          >
+            {friend.isBlocked ? '🔓 Desbloquear contacto' : '🚫 Bloquear contacto'}
+          </div>
+          <div className="z05-context-item danger" onClick={() => handleDeleteConfirm(friend)}>
+            🗑️ Eliminar contacto
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // Mobile Profile tab view
+  const renderMobileProfileView = () => (
+    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto', flex: 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div className="z05-avatar-box" style={{ width: 64, height: 64 }} onClick={onOpenProfileModal}>
+          <AvatarView avatar={profile.avatar} alt={stripPlusTags(profile.nickname)} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 'bold', fontSize: 15, color: '#0b3474' }}>
+            {renderFormattedText(profile.nickname, 'mob-prof')}
+          </div>
+          <div style={{ fontSize: 12, color: '#555' }}>{profile.email}</div>
+        </div>
+      </div>
+
+      <button type="button" className="c05-btn c05-btn-primary" style={{ padding: '10px 14px' }} onClick={onOpenProfileModal}>
+        🖼️ Cambiar foto real, apodo y canción (8)
+      </button>
+
+      {canInstallPwa && (
+        <button type="button" className="c05-btn c05-btn-primary" style={{ padding: '10px 14px' }} onClick={onInstallPwa}>
+          📲 Instalar Zumbido 05 en tu dispositivo
+        </button>
+      )}
+
+      {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
+        <button type="button" className="c05-btn" style={{ padding: '10px 14px' }} onClick={onRequestNotifications}>
+          🔔 Activar notificaciones de mensajes
+        </button>
+      )}
+
+      <button type="button" className="c05-btn" style={{ padding: '10px 14px' }} onClick={onOpenAbout}>
+        ℹ️ Acerca de Zumbido 05
+      </button>
+
+      <button type="button" className="c05-btn c05-btn-danger" style={{ padding: '10px 14px' }} onClick={onLogout}>
+        🚪 Cerrar sesión
+      </button>
+    </div>
+  );
+
+  // Mobile Recent/Unread Chats tab view
+  const renderMobileChatsView = () => {
+    const sorted = [...friends].sort((a, b) => (b.unreadCount - a.unreadCount) || (Number(b.isOnline) - Number(a.isOnline)));
+    return (
+      <div className="z05-buddy-list">
+        <div className="z05-group-header">💬 Conversaciones ({sorted.length})</div>
+        {sorted.length === 0 ? (
+          <div style={{ padding: 20, textAlign: 'center', color: '#666' }}>
+            Agrega amigos por su correo para empezar a chatear.
+          </div>
+        ) : (
+          sorted.map(renderFriendRow)
+        )}
+      </div>
+    );
   };
 
   return (
-    <div
-      className={`xp-window ${isFocused ? 'focused' : 'inactive'}`}
-      style={{
-        width: 310,
-        height: 540,
-        top: 20,
-        left: 30,
-        zIndex: isFocused ? 200 : 100
-      }}
-      onClick={onFocus}
+    <DraggableWindow
+      title={`Zumbido 05 — ${stripPlusTags(profile.nickname)}`}
+      titleIcon={<ZumbidoLogo size={16} />}
+      initialX={28}
+      initialY={22}
+      width={325}
+      height={560}
+      zIndex={zIndex}
+      isFocused={isFocused}
+      isMobile={isMobile}
+      onFocus={onFocus}
+      onMinimize={onMinimize}
+      onClose={onLogout}
     >
-      {/* Titlebar */}
-      <div className="xp-window-titlebar">
-        <div className="xp-window-title">
-          <svg viewBox="0 0 16 16" width="14" height="14" style={{ verticalAlign: 'middle' }}>
-            <circle cx="8" cy="8" r="7" fill="#0078D7"/>
-            <path d="M4 8 C4 5 7 5 8 8 C9 5 12 5 12 8" stroke="#ffffff" stroke-width="1.5" fill="none"/>
-          </svg>
-          MSN Messenger - {profile.nickname}
+      {/* Classic Menubar (Desktop) */}
+      <div className="c05-menubar">
+        <div className="c05-menu-item" onClick={onLogout}>Sesión</div>
+        <div className="c05-menu-item" onClick={onOpenAddFriend}>Contactos</div>
+        <div className="c05-menu-item" onClick={onOpenProfileModal}>Perfil</div>
+        <div
+          className="c05-menu-item"
+          onClick={() => setGroupMode((m) => (m === 'status' ? 'group' : 'status'))}
+        >
+          Ver: {groupMode === 'status' ? 'Estado' : 'Grupos'}
         </div>
-        <div className="xp-window-controls">
-          <button className="xp-control-btn xp-btn-min" onClick={onMinimize}>
-            _
-          </button>
-          <button className="xp-control-btn xp-btn-close" onClick={onClose}>
-            ✕
-          </button>
-        </div>
+        <div className="c05-menu-item" onClick={onOpenAbout}>Ayuda</div>
       </div>
 
-      {/* Menubar */}
-      <div className="xp-menubar">
-        <div className="xp-menu-item">Archivo</div>
-        <div className="xp-menu-item" onClick={onOpenInvite}>Contactos</div>
-        <div className="xp-menu-item">Acciones</div>
-        <div className="xp-menu-item">Herramientas</div>
-        <div className="xp-menu-item">Ayuda</div>
-      </div>
-
-      {/* Body with Tabs and Content */}
-      <div className="xp-window-body" style={{ flexDirection: 'row' }}>
-        {/* Left Tab Strip */}
-        <div className="msn-tab-strip">
+      <div className="z05-main-layout">
+        {/* Left Vertical Tab Strip (Desktop) */}
+        <div className="z05-tab-strip">
           <button
-            className={`msn-tab-btn ${activeTab === 'contacts' ? 'active' : ''}`}
-            title="Contactos de Messenger"
-            onClick={() => setActiveTab('contacts')}
+            type="button"
+            className={`z05-tab-btn ${groupMode === 'status' ? 'active' : ''}`}
+            title="Contactos por estado"
+            onClick={() => setGroupMode('status')}
           >
             👥
           </button>
           <button
-            className={`msn-tab-btn ${activeTab === 'today' ? 'active' : ''}`}
-            title="MSN Hoy y Noticias"
-            onClick={() => setActiveTab('today')}
+            type="button"
+            className={`z05-tab-btn ${groupMode === 'group' ? 'active' : ''}`}
+            title="Organizar por grupos personalizados"
+            onClick={() => setGroupMode('group')}
           >
-            📰
+            📁
           </button>
           <button
-            className={`msn-tab-btn ${activeTab === 'mobile' ? 'active' : ''}`}
-            title="Messenger Móvil"
-            onClick={() => setActiveTab('mobile')}
+            type="button"
+            className="z05-tab-btn"
+            title="Cambiar foto real y Colores Plus"
+            onClick={onOpenProfileModal}
           >
-            📱
+            🖼️
           </button>
           <button
-            className={`msn-tab-btn ${activeTab === 'games' ? 'active' : ''}`}
-            title="Juegos MSN"
-            onClick={() => setActiveTab('games')}
+            type="button"
+            className="z05-tab-btn"
+            title="Acerca de Zumbido 05"
+            onClick={onOpenAbout}
           >
-            🎮
+            ℹ️
           </button>
         </div>
 
-        {/* Main Content Area */}
-        <div className="msn-main-content">
-          {/* User Profile Card */}
-          <div className="msn-user-card">
-            <div
-              className="msn-avatar-box"
-              onClick={handleAvatarClick}
-              title="Haz clic para cambiar tu foto para mostrar"
-              dangerouslySetInnerHTML={{ __html: getAvatarSvg(profile.avatar) }}
-            />
-            <div className="msn-user-info">
-              <div className="msn-nickname-row">
+        <div className="z05-main-content">
+          {isMobile && mobileSection === 'profile' ? (
+            renderMobileProfileView()
+          ) : isMobile && mobileSection === 'chats' ? (
+            renderMobileChatsView()
+          ) : (
+            <>
+              {/* User Card */}
+              <div className="z05-user-card">
+                <div
+                  className="z05-avatar-box"
+                  onClick={onOpenProfileModal}
+                  title="Haz clic para cambiar tu foto real o apodo"
+                >
+                  <AvatarView avatar={profile.avatar} alt={stripPlusTags(profile.nickname)} />
+                  <div className="z05-avatar-edit-hint">Editar</div>
+                </div>
+
+                <div className="z05-user-info">
+                  <div
+                    className="z05-user-nick-display"
+                    onClick={onOpenProfileModal}
+                    title="Editar apodo y Colores Plus"
+                  >
+                    {renderFormattedText(profile.nickname, 'my-nick')}
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <span
+                      dangerouslySetInnerHTML={{
+                        __html: USER_STATUSES[profile.status]?.iconSvg || USER_STATUSES.online.iconSvg
+                      }}
+                    />
+                    <select
+                      className="z05-status-select"
+                      value={profile.status}
+                      onChange={handleStatusChange}
+                    >
+                      {Object.values(USER_STATUSES).map((st) => (
+                        <option key={st.id} value={st.id}>
+                          {st.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <input
+                    type="text"
+                    className="z05-personal-msg-input"
+                    value={msgValue}
+                    onChange={(e) => setMsgValue(e.target.value)}
+                    onBlur={handleMsgSave}
+                    onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                    placeholder="Escribe un mensaje personal o canción (8)..."
+                  />
+                </div>
+              </div>
+
+              {/* Quick Actions Bar */}
+              <div className="z05-quick-bar">
+                <button type="button" className="z05-quick-btn" onClick={onOpenAddFriend}>
+                  <span>➕ Agregar amigo</span>
+                  {incomingRequests.length > 0 && (
+                    <span className="z05-pill-badge">{incomingRequests.length}</span>
+                  )}
+                </button>
+
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button
+                    type="button"
+                    className="z05-quick-btn"
+                    onClick={() => setGroupMode((m) => (m === 'status' ? 'group' : 'status'))}
+                    title="Alternar vista por Estado o por Grupos"
+                  >
+                    {groupMode === 'status' ? '📁 Grupos' : '🟢 Estado'}
+                  </button>
+                  {canInstallPwa && (
+                    <button type="button" className="z05-quick-btn" onClick={onInstallPwa}>
+                      📲 Instalar
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Search Bar */}
+              <div style={{ padding: '4px 8px', background: '#fff', borderBottom: '1px solid #e1e7f0' }}>
                 <input
                   type="text"
-                  className="msn-nickname-input"
-                  value={nickValue}
-                  onChange={(e) => setNickValue(e.target.value)}
-                  onBlur={handleNickBlur}
-                  onKeyDown={(e) => e.key === 'Enter' && handleNickBlur()}
-                  title="Haz clic para editar tu apodo"
+                  className="c05-input"
+                  style={{ width: '100%', fontSize: 11, padding: '3px 6px' }}
+                  placeholder="Buscar contacto por apodo, correo o grupo..."
+                  value={filterQuery}
+                  onChange={(e) => setFilterQuery(e.target.value)}
                 />
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span
-                  dangerouslySetInnerHTML={{
-                    __html: MSN_STATUSES[profile.status]?.iconSvg || MSN_STATUSES.online.iconSvg
-                  }}
-                />
-                <select
-                  className="msn-status-dropdown"
-                  value={profile.status}
-                  onChange={handleStatusChange}
-                >
-                  {Object.values(MSN_STATUSES).map((st) => (
-                    <option key={st.id} value={st.id}>
-                      {st.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <input
-                type="text"
-                className="msn-personal-msg-input"
-                value={msgValue}
-                onChange={(e) => setMsgValue(e.target.value)}
-                onBlur={handleMsgBlur}
-                onKeyDown={(e) => e.key === 'Enter' && handleMsgBlur()}
-                placeholder="Escribe un mensaje personal o canción..."
-                title="Mensaje personal / Lo que estoy escuchando"
-              />
-            </div>
-          </div>
-
-          {/* Quick Bar: Room & Invite Button */}
-          <div className="msn-quick-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
-              <span style={{ fontSize: 9, color: '#444' }}>Sala:</span>
-              <span className="msn-room-badge">{roomId}</span>
-            </div>
-            <button className="msn-invite-btn" onClick={onOpenInvite}>
-              + Invitar amigo
-            </button>
-          </div>
-
-          {/* Contact Search Bar */}
-          <div style={{ padding: '3px 8px', background: '#fff', borderBottom: '1px solid #e1e7f0' }}>
-            <input
-              type="text"
-              className="xp-input"
-              style={{ width: '100%', fontSize: 10, padding: '2px 4px' }}
-              placeholder="Buscar un contacto..."
-              value={filterQuery}
-              onChange={(e) => setFilterQuery(e.target.value)}
-            />
-          </div>
-
-          {/* Buddy List Accordion */}
-          <div className="msn-buddy-list">
-            {/* ONLINE GROUP */}
-            <div
-              className="msn-group-header"
-              onClick={() => setOnlineCollapsed(!onlineCollapsed)}
-            >
-              <span className={`msn-group-arrow ${onlineCollapsed ? 'collapsed' : ''}`}>
-                ▼
-              </span>
-              <span>Conectados ({otherUsers.length})</span>
-            </div>
-
-            {!onlineCollapsed && (
-              <div>
-                {otherUsers.length === 0 ? (
-                  <div
-                    style={{
-                      padding: '12px 16px',
-                      color: '#777',
-                      fontSize: 10,
-                      fontStyle: 'italic',
-                      lineHeight: 1.4,
-                      textAlign: 'center'
-                    }}
-                  >
-                    No hay amigos conectados en esta sala aún.<br/>
+              {/* Buddy List Accordion */}
+              <div className="z05-buddy-list">
+                {friends.length === 0 ? (
+                  <div style={{ padding: '20px 14px', textAlign: 'center', color: '#555', lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 28, marginBottom: 6 }}>👥</div>
+                    <strong>Aún no tienes contactos en tu lista.</strong>
+                    <div style={{ fontSize: 11, marginTop: 4 }}>
+                      Agrega a un amigo usando su correo electrónico registrado en Zumbido 05.
+                    </div>
                     <button
-                      className="xp-btn xp-btn-primary"
-                      style={{ marginTop: 6, fontSize: 10 }}
-                      onClick={onOpenInvite}
+                      type="button"
+                      className="c05-btn c05-btn-primary"
+                      style={{ marginTop: 10 }}
+                      onClick={onOpenAddFriend}
                     >
-                      Copiar enlace e invitar
+                      ➕ Agregar primer amigo
                     </button>
                   </div>
                 ) : (
-                  otherUsers
-                    .filter((u) =>
-                      u.nickname.toLowerCase().includes(filterQuery.toLowerCase()) ||
-                      u.email.toLowerCase().includes(filterQuery.toLowerCase())
-                    )
-                    .map((user) => (
-                      <div
-                        key={user.socketId || user.id}
-                        className="msn-buddy-item"
-                        onDoubleClick={() => onOpenChat(user)}
-                        title="Doble clic para iniciar conversación"
-                      >
-                        <span
-                          className="msn-buddy-pawn"
-                          dangerouslySetInnerHTML={{
-                            __html: MSN_STATUSES[user.status]?.iconSvg || MSN_STATUSES.online.iconSvg
-                          }}
-                        />
-                        <div className="msn-buddy-info">
-                          <div className="msn-buddy-nickname">
-                            {renderParsed(user.nickname)}
-                          </div>
-                          {user.personalMessage && (
-                            <div className="msn-buddy-msg">
-                              {renderParsed(user.personalMessage)}
-                            </div>
-                          )}
+                  groupedSections.map((sec) => {
+                    const isCol = Boolean(collapsedGroups[sec.key]);
+                    return (
+                      <div key={sec.key}>
+                        <div className="z05-group-header" onClick={() => toggleGroup(sec.key)}>
+                          <span className={`z05-group-arrow ${isCol ? 'collapsed' : ''}`}>▼</span>
+                          <span>{sec.label}</span>
                         </div>
+                        {!isCol && sec.items.map(renderFriendRow)}
                       </div>
-                    ))
+                    );
+                  })
                 )}
               </div>
-            )}
 
-            {/* OFFLINE GROUP */}
-            <div
-              className="msn-group-header"
-              onClick={() => setOfflineCollapsed(!offlineCollapsed)}
-            >
-              <span className={`msn-group-arrow ${offlineCollapsed ? 'collapsed' : ''}`}>
-                ▼
-              </span>
-              <span>No conectados ({offlineBuddies.length})</span>
-            </div>
-
-            {!offlineCollapsed && (
-              <div>
-                {offlineBuddies
-                  .filter((b) =>
-                    b.nickname.toLowerCase().includes(filterQuery.toLowerCase())
-                  )
-                  .map((b) => (
-                    <div
-                      key={b.id}
-                      className="msn-buddy-item offline"
-                      onDoubleClick={() => onOpenChat(b)}
-                      title="Contacto no conectado (Doble clic para dejar mensaje)"
-                    >
-                      <span
-                        className="msn-buddy-pawn"
-                        dangerouslySetInnerHTML={{ __html: MSN_STATUSES.offline.iconSvg }}
-                      />
-                      <div className="msn-buddy-info">
-                        <div className="msn-buddy-nickname">
-                          {renderParsed(b.nickname)}
-                        </div>
-                        <div className="msn-buddy-msg">
-                          {renderParsed(b.personalMessage)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+              {/* Bottom Novedades 05 Bar */}
+              <div className="z05-bottom-banner">
+                <span>
+                  <strong style={{ color: '#0055ea' }}>Novedades 05:</strong> Tinta, clips de voz (F2) y zumbidos activos.
+                </span>
+                {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
+                  <button
+                    type="button"
+                    className="c05-btn"
+                    style={{ fontSize: 10, padding: '1px 6px' }}
+                    onClick={onRequestNotifications}
+                  >
+                    🔔 Avisos
+                  </button>
+                )}
               </div>
-            )}
-          </div>
-
-          {/* Bottom MSN Hoy Ads */}
-          <div className="msn-bottom-ad" onClick={() => setActiveTab('today')}>
-            <span className="msn-ad-logo">MSN Hoy</span>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'now' }}>
-              ¡Descubre los nuevos guiños y emoticonos animados de Messenger!
-            </span>
-          </div>
+            </>
+          )}
         </div>
       </div>
-    </div>
+    </DraggableWindow>
   );
 }

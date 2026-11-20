@@ -1,209 +1,239 @@
 import React, { useState, useEffect } from 'react';
-import { playToasterSound } from '../../services/soundEngine';
-import { getAvatarSvg } from '../../services/avatars';
+import ZumbidoLogo from '../Common/ZumbidoLogo';
+import { AvatarView } from '../../services/avatars';
+import { playToasterSound, setSoundMuted } from '../../services/soundEngine';
+import { stripPlusTags } from '../../services/plusFormatter';
 
 export default function Desktop({
   children,
-  windows,
-  onRestoreWindow,
+  windows = [],
   activeWindowId,
+  onRestoreWindow,
   onFocusWindow,
+  onOpenAbout,
+  onLogout,
+  isLoggedIn,
+  userProfile,
+  connectionState,
   toasterData,
-  onToasterClick
+  onToasterClick,
+  onDismissToaster,
+  isMobile,
+  mobileSection,
+  onSelectMobileSection,
+  hasOpenMobileChat,
+  totalUnreadCount = 0,
+  pendingRequestCount = 0
 }) {
   const [currentTime, setCurrentTime] = useState('');
-  const [showStartMenu, setShowStartMenu] = useState(false);
+  const [showClassicMenu, setShowClassicMenu] = useState(false);
+  const [muted, setMuted] = useState(false);
 
-  // Update system tray digital clock
   useEffect(() => {
     const updateClock = () => {
-      const now = new Date();
-      setCurrentTime(
-        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      );
+      setCurrentTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     };
     updateClock();
     const interval = setInterval(updateClock, 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Play sound when toaster appears
   useEffect(() => {
     if (toasterData) {
       playToasterSound();
     }
   }, [toasterData]);
 
+  const toggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+    setSoundMuted(next);
+  };
+
   return (
-    <div className="xp-desktop" onClick={() => setShowStartMenu(false)}>
-      {/* Bliss background hills overlay */}
-      <div className="bliss-hills-overlay" />
+    <div className="c05-desktop" onClick={() => setShowClassicMenu(false)}>
+      {/* Procedural Sunny Meadow Overlay (Desktop) */}
+      <div className="c05-meadow-overlay" />
 
-      {/* Desktop Retro Icons */}
-      <div style={{ position: 'absolute', top: 16, left: 16, display: 'flex', flexDirection: 'column', gap: 16, zIndex: 10 }}>
+      {/* Reconnecting Banner */}
+      {isLoggedIn && connectionState === 'reconnecting' && (
+        <div className="c05-reconnect-banner">
+          <span>⚠️</span> Reconectando con el servidor de Zumbido 05...
+        </div>
+      )}
+
+      {/* Desktop Retro Shortcuts (Brand-safe original labels) */}
+      <div className="c05-desktop-icons">
         <div
-          style={{ width: 70, textAlign: 'center', cursor: 'pointer', color: '#fff' }}
-          onDoubleClick={() => onRestoreWindow('contactList')}
+          className="c05-desktop-shortcut"
+          onDoubleClick={() => onRestoreWindow?.('contactList')}
+          title="Abrir Zumbido 05"
         >
-          <div style={{ fontSize: 30, filter: 'drop-shadow(1px 1px 2px #000)' }}>🦋</div>
-          <div style={{ fontSize: 11, textShadow: '1px 1px 2px #000', marginTop: 2 }}>
-            MSN Messenger
+          <div className="c05-shortcut-icon">
+            <ZumbidoLogo size={34} />
           </div>
+          <div className="c05-shortcut-label">Zumbido 05</div>
         </div>
 
-        <div style={{ width: 70, textAlign: 'center', cursor: 'pointer', color: '#fff' }}>
-          <div style={{ fontSize: 30, filter: 'drop-shadow(1px 1px 2px #000)' }}>💻</div>
-          <div style={{ fontSize: 11, textShadow: '1px 1px 2px #000', marginTop: 2 }}>
-            Mi PC
-          </div>
+        <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenAbout?.()}>
+          <div className="c05-shortcut-icon">💻</div>
+          <div className="c05-shortcut-label">Mi Equipo</div>
         </div>
 
-        <div style={{ width: 70, textAlign: 'center', cursor: 'pointer', color: '#fff' }}>
-          <div style={{ fontSize: 30, filter: 'drop-shadow(1px 1px 2px #000)' }}>🌐</div>
-          <div style={{ fontSize: 11, textShadow: '1px 1px 2px #000', marginTop: 2 }}>
-            Internet Explorer
-          </div>
+        <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenAbout?.()}>
+          <div className="c05-shortcut-icon">🌐</div>
+          <div className="c05-shortcut-label">Navegador Web</div>
         </div>
 
-        <div style={{ width: 70, textAlign: 'center', cursor: 'pointer', color: '#fff' }}>
-          <div style={{ fontSize: 30, filter: 'drop-shadow(1px 1px 2px #000)' }}>🗑️</div>
-          <div style={{ fontSize: 11, textShadow: '1px 1px 2px #000', marginTop: 2 }}>
-            Papelera
-          </div>
+        <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenAbout?.()}>
+          <div className="c05-shortcut-icon">🎵</div>
+          <div className="c05-shortcut-label">Reproductor 05</div>
+        </div>
+
+        <div className="c05-desktop-shortcut">
+          <div className="c05-shortcut-icon">🗑️</div>
+          <div className="c05-shortcut-label">Papelera</div>
         </div>
       </div>
 
-      {/* Render All Windows */}
+      {/* Render Windows */}
       {children}
 
-      {/* Bottom Right Toaster Notification */}
+      {/* Toaster Popup Notification */}
       {toasterData && (
-        <div className="msn-toaster" onClick={onToasterClick}>
-          <div className="msn-toaster-header">
-            <div className="msn-toaster-title">
-              <span>🦋</span> MSN Messenger
+        <div
+          className="z05-toaster"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToasterClick?.();
+          }}
+        >
+          <div className="z05-toaster-header">
+            <div className="z05-toaster-title">
+              <ZumbidoLogo size={14} />
+              <span>Zumbido 05</span>
             </div>
-            <span style={{ fontSize: 10, color: '#316ac5' }}>✕</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismissToaster?.();
+              }}
+              style={{ background: 'none', border: 'none', color: '#316ac5', cursor: 'pointer', fontSize: 11 }}
+            >
+              ✕
+            </button>
           </div>
-          <div className="msn-toaster-body">
-            <div
-              className="msn-toaster-avatar"
-              dangerouslySetInnerHTML={{ __html: getAvatarSvg(toasterData.user?.avatar || 'butterfly') }}
-            />
-            <div className="msn-toaster-text">
-              <span className="msn-toaster-nickname">
-                {toasterData.user?.nickname || 'Un contacto'}
-              </span>
-              <br />
-              {toasterData.text || 'acaba de iniciar sesión'}
+          <div className="z05-toaster-body">
+            <div className="z05-toaster-avatar">
+              <AvatarView avatar={toasterData.user?.avatar || 'bubbles'} alt="Avatar" />
+            </div>
+            <div className="z05-toaster-text">
+              <div className="z05-toaster-nickname">
+                {stripPlusTags(toasterData.user?.nickname || 'Contacto')}
+              </div>
+              <div>{toasterData.text}</div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Start Menu (XP Classic Two-Column Menu) */}
-      {showStartMenu && (
+      {/* Classic Two-Column Green Menu (Desktop, original glossy orb branding) */}
+      {showClassicMenu && !isMobile && (
         <div
           onClick={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
-            bottom: 30,
+            bottom: 32,
             left: 0,
-            width: 380,
-            height: 440,
+            width: 360,
             background: '#ffffff',
             border: '2px solid #0055ea',
-            borderTopLeftRadius: 6,
-            borderTopRightRadius: 6,
-            boxShadow: '3px -3px 12px rgba(0,0,0,0.4)',
+            borderTopLeftRadius: 8,
+            borderTopRightRadius: 8,
+            boxShadow: '3px -3px 14px rgba(0,0,0,0.42)',
             zIndex: 10000,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden'
           }}
         >
-          {/* Header */}
           <div
             style={{
               height: 52,
               background: 'linear-gradient(to right, #0058ee 0%, #3593ff 100%)',
               display: 'flex',
               alignItems: 'center',
-              padding: '0 16px',
-              gap: 12,
+              padding: '0 14px',
+              gap: 10,
               color: '#fff'
             }}
           >
-            <div style={{ width: 36, height: 36, borderRadius: 3, border: '2px solid #fff', overflow: 'hidden', background: '#fff' }}
-              dangerouslySetInnerHTML={{ __html: getAvatarSvg('butterfly') }}
-            />
-            <span style={{ fontSize: 14, fontWeight: 'bold', textShadow: '1px 1px 2px #000' }}>
-              Usuario de Windows XP
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 4,
+                border: '2px solid #fff',
+                overflow: 'hidden',
+                background: '#fff'
+              }}
+            >
+              <AvatarView avatar={userProfile?.avatar || 'bubbles'} alt="Perfil" />
+            </div>
+            <span style={{ fontSize: 13, fontWeight: 'bold', textShadow: '1px 1px 2px #000' }}>
+              {userProfile ? stripPlusTags(userProfile.nickname) : 'Escritorio Clásico 05'}
             </span>
           </div>
 
-          {/* Two column body */}
-          <div style={{ flex: 1, display: 'flex' }}>
-            {/* Left Column (Pinned Programs) */}
-            <div style={{ width: '50%', background: '#fff', padding: 8, display: 'flex', flexDirection: 'column', gap: 6, borderRight: '1px solid #95bdee' }}>
+          <div style={{ display: 'flex', minHeight: 230 }}>
+            <div style={{ width: '54%', background: '#fff', padding: 8, display: 'flex', flexDirection: 'column', gap: 6, borderRight: '1px solid #95bdee' }}>
               <div
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer', borderRadius: 2 }}
-                onClick={() => { onRestoreWindow('contactList'); setShowStartMenu(false); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', cursor: 'pointer', borderRadius: 3 }}
+                onClick={() => {
+                  onRestoreWindow?.('contactList');
+                  setShowClassicMenu(false);
+                }}
               >
-                <span style={{ fontSize: 20 }}>🦋</span>
+                <ZumbidoLogo size={24} />
                 <div>
-                  <strong style={{ fontSize: 11, color: '#000' }}>MSN Messenger 7.5</strong>
-                  <div style={{ fontSize: 9, color: '#777' }}>Mensajería instantánea</div>
+                  <strong style={{ fontSize: 12, color: '#000' }}>Zumbido 05</strong>
+                  <div style={{ fontSize: 10, color: '#666' }}>Mensajería retro</div>
                 </div>
               </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', color: '#444' }}>
                 <span style={{ fontSize: 20 }}>🌐</span>
                 <div>
-                  <strong style={{ fontSize: 11, color: '#000' }}>Internet Explorer</strong>
-                  <div style={{ fontSize: 9, color: '#777' }}>Examinar la web</div>
+                  <strong style={{ fontSize: 11 }}>Navegador Web</strong>
+                  <div style={{ fontSize: 10, color: '#777' }}>Acceso rápido</div>
                 </div>
               </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', color: '#444' }}>
                 <span style={{ fontSize: 20 }}>🎵</span>
                 <div>
-                  <strong style={{ fontSize: 11, color: '#000' }}>Windows Media Player</strong>
-                  <div style={{ fontSize: 9, color: '#777' }}>Música y vídeos</div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', cursor: 'pointer' }}>
-                <span style={{ fontSize: 20 }}>🎮</span>
-                <div>
-                  <strong style={{ fontSize: 11, color: '#000' }}>Pinball 3D</strong>
-                  <div style={{ fontSize: 9, color: '#777' }}>Space Cadet</div>
+                  <strong style={{ fontSize: 11 }}>Reproductor 05</strong>
+                  <div style={{ fontSize: 10, color: '#777' }}>Música y audio</div>
                 </div>
               </div>
             </div>
 
-            {/* Right Column (My Documents, Control Panel) */}
-            <div style={{ width: '50%', background: '#d3e5fa', padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#0b3474', cursor: 'pointer' }}>
-                📁 Mis documentos
-              </div>
-              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#0b3474', cursor: 'pointer' }}>
-                🖼️ Mis imágenes
-              </div>
-              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#0b3474', cursor: 'pointer' }}>
-                🎵 Mi música
-              </div>
-              <div style={{ width: '100%', height: 1, background: '#a0c0e8', margin: '4px 0' }} />
-              <div style={{ fontSize: 11, color: '#0b3474', cursor: 'pointer' }}>
-                ⚙️ Panel de control
-              </div>
-              <div style={{ fontSize: 11, color: '#0b3474', cursor: 'pointer' }}>
-                🔍 Buscar archivos
+            <div style={{ width: '46%', background: '#d3e5fa', padding: 10, display: 'flex', flexDirection: 'column', gap: 9 }}>
+              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#0b3474' }}>📁 Mis documentos</div>
+              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#0b3474' }}>🖼️ Mis imágenes</div>
+              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#0b3474' }}>🎵 Mi música</div>
+              <div style={{ height: 1, background: '#a0c0e8' }} />
+              <div
+                style={{ fontSize: 11, color: '#0b3474', cursor: 'pointer', fontWeight: 'bold' }}
+                onClick={() => {
+                  setShowClassicMenu(false);
+                  onOpenAbout?.();
+                }}
+              >
+                ℹ️ Acerca de Zumbido 05
               </div>
             </div>
           </div>
 
-          {/* Footer with Turn Off Computer */}
           <div
             style={{
               height: 38,
@@ -212,79 +242,137 @@ export default function Desktop({
               alignItems: 'center',
               justifyContent: 'flex-end',
               padding: '0 12px',
-              gap: 12
+              gap: 8
             }}
           >
-            <button className="xp-btn" style={{ fontSize: 10 }}>
-              🔒 Cerrar sesión
-            </button>
-            <button className="xp-btn" style={{ fontSize: 10, background: '#e83323', color: '#fff' }}>
-              ⏻ Apagar equipo
-            </button>
+            {isLoggedIn && (
+              <button
+                type="button"
+                className="c05-btn"
+                onClick={() => {
+                  setShowClassicMenu(false);
+                  onLogout?.();
+                }}
+              >
+                🚪 Cerrar sesión
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {/* Windows XP Taskbar */}
-      <div className="xp-taskbar">
-        {/* Start Button */}
+      {/* Classic Desktop Taskbar */}
+      <div className="c05-taskbar">
         <button
-          className="xp-start-btn"
+          type="button"
+          className="c05-menu-btn"
           onClick={(e) => {
             e.stopPropagation();
-            setShowStartMenu(!showStartMenu);
+            setShowClassicMenu((v) => !v);
           }}
         >
-          {/* Windows 4-Color Flag */}
-          <svg className="xp-windows-flag" viewBox="0 0 16 16">
-            <path d="M1 2.5 L6.5 1.5 L6.5 7 L1 7 Z" fill="#E81123" />
-            <path d="M7.5 1.3 L15 0 L15 7 L7.5 7 Z" fill="#00B0F0" />
-            <path d="M1 8 L6.5 8 L6.5 13.5 L1 12.5 Z" fill="#00A4EF" />
-            <path d="M7.5 8 L15 8 L15 15 L7.5 13.7 Z" fill="#7FBA00" />
+          {/* Original glossy orb emblem (zero trademark flags) */}
+          <svg viewBox="0 0 20 20" width="18" height="18">
+            <defs>
+              <radialGradient id="c05Orb" cx="35%" cy="30%" r="70%">
+                <stop offset="0%" stopColor="#ffffff" />
+                <stop offset="45%" stopColor="#a7f268" />
+                <stop offset="100%" stopColor="#1b6e12" />
+              </radialGradient>
+            </defs>
+            <circle cx="10" cy="10" r="8.5" fill="url(#c05Orb)" stroke="#ffffff" strokeWidth="1.4" />
+            <circle cx="10" cy="10" r="3" fill="#ffffff" opacity="0.85" />
           </svg>
-          inicio
+          menú
         </button>
 
-        {/* Running Windows Taskbar Items */}
-        <div className="xp-taskbar-tasks">
-          {windows.map((win) => (
-            <button
-              key={win.id}
-              className={`xp-taskbar-item ${activeWindowId === win.id && !win.isMinimized ? 'active' : ''}`}
-              onClick={() => {
-                if (win.isMinimized) {
-                  onRestoreWindow(win.id);
-                } else if (activeWindowId === win.id) {
-                  win.onMinimize();
-                } else {
-                  onFocusWindow(win.id);
-                }
-              }}
-            >
-              <span>{win.icon || '🦋'}</span>
-              <span>{win.title}</span>
-            </button>
-          ))}
+        <div className="c05-taskbar-tasks">
+          {windows.map((win) => {
+            const isActive = activeWindowId === win.id && !win.isMinimized;
+            const isFlashing = Boolean(win.isFlashing) && !isActive;
+            return (
+              <button
+                key={win.id}
+                type="button"
+                className={`c05-taskbar-item ${isActive ? 'active' : ''} ${isFlashing ? 'flashing' : ''}`}
+                onClick={() => {
+                  if (win.isMinimized) {
+                    onRestoreWindow?.(win.id);
+                  } else if (isActive) {
+                    win.onMinimize?.();
+                  } else {
+                    onFocusWindow?.(win.id);
+                  }
+                }}
+              >
+                {win.icon}
+                <span className="c05-taskbar-item-text">{win.title}</span>
+                {win.unreadCount > 0 && (
+                  <span className="c05-taskbar-badge">{win.unreadCount}</span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
-        {/* System Tray */}
-        <div className="xp-systray">
-          {/* MSN Twin Buddy Tray Icon */}
-          <span
-            className="xp-tray-icon"
-            title="MSN Messenger 7.5 - Conectado"
-            onClick={() => onRestoreWindow('contactList')}
+        <div className="c05-systray">
+          <button
+            type="button"
+            className="c05-tray-btn"
+            title="Abrir Zumbido 05"
+            onClick={() => onRestoreWindow?.('contactList')}
           >
-            🦋
-          </span>
-          <span className="xp-tray-icon" title="Volumen: 100%">
-            🔊
-          </span>
-          <span style={{ fontWeight: 'bold', marginLeft: 4 }}>
-            {currentTime}
-          </span>
+            <ZumbidoLogo size={17} />
+          </button>
+          <button
+            type="button"
+            className="c05-tray-btn"
+            title={muted ? 'Activar sonidos' : 'Silenciar sonidos'}
+            onClick={toggleMute}
+          >
+            {muted ? '🔇' : '🔊'}
+          </button>
+          <span style={{ fontWeight: 'bold', marginLeft: 3 }}>{currentTime}</span>
         </div>
       </div>
+
+      {/* Mobile Bottom Navigation Bar (only shown on mobile when logged in and no chat fullscreen) */}
+      {isMobile && isLoggedIn && !hasOpenMobileChat && (
+        <nav className="c05-mobile-nav" aria-label="Navegación principal">
+          <button
+            type="button"
+            className={`c05-mobile-nav-btn ${mobileSection === 'contacts' ? 'active' : ''}`}
+            onClick={() => onSelectMobileSection?.('contacts')}
+          >
+            <span style={{ fontSize: 18 }}>👥</span>
+            <span>Contactos</span>
+            {pendingRequestCount > 0 && (
+              <span className="c05-mobile-nav-badge">{pendingRequestCount}</span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={`c05-mobile-nav-btn ${mobileSection === 'chats' ? 'active' : ''}`}
+            onClick={() => onSelectMobileSection?.('chats')}
+          >
+            <span style={{ fontSize: 18 }}>💬</span>
+            <span>Chats</span>
+            {totalUnreadCount > 0 && (
+              <span className="c05-mobile-nav-badge">{totalUnreadCount}</span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={`c05-mobile-nav-btn ${mobileSection === 'profile' ? 'active' : ''}`}
+            onClick={() => onSelectMobileSection?.('profile')}
+          >
+            <span style={{ fontSize: 18 }}>⚙️</span>
+            <span>Perfil</span>
+          </button>
+        </nav>
+      )}
     </div>
   );
 }

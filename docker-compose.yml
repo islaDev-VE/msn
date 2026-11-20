@@ -1,0 +1,15 @@
+services:
+  zumbido05:
+    build: .
+    container_name: zumbido-05
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_PATH: /app/data/zumbido05.db
+      JWT_SECRET: ${JWT_SECRET:-cambia-esta-clave-en-produccion}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    volumes:
+      - ./data:/app/data

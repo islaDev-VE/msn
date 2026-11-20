@@ -1,17 +1,33 @@
-// Authentic MSN Messenger 7.5 Retro Display Pictures (SVG based)
+import React from 'react';
 
+// Original 2005-inspired Retro Display Pictures (100% original SVGs)
 export const RETRO_AVATARS = [
   {
-    id: 'butterfly',
-    name: 'Mariposa MSN',
-    svg: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect width="48" height="48" fill="#E8F4FD"/>
-      <path d="M12 16 C4 6, 18 4, 22 14 C24 19, 18 24, 12 16 Z" fill="#00B0F0"/>
-      <path d="M36 16 C44 6, 30 4, 26 14 C24 19, 30 24, 36 16 Z" fill="#FF9900"/>
-      <path d="M15 32 C6 38, 20 42, 23 34 C25 28, 18 27, 15 32 Z" fill="#70AD47"/>
-      <path d="M33 32 C42 38, 28 42, 25 34 C23 28, 30 27, 33 32 Z" fill="#ED7D31"/>
-      <ellipse cx="24" cy="24" rx="4" ry="11" fill="#0078D7"/>
-      <circle cx="24" cy="12" r="3" fill="#0078D7"/>
+    id: 'bubbles',
+    name: 'Burbujas Zumbido',
+    svg: `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="avBg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#d7eeff"/>
+          <stop offset="100%" stop-color="#9ccdff"/>
+        </linearGradient>
+        <linearGradient id="avB1" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#76d3ff"/>
+          <stop offset="100%" stop-color="#0060df"/>
+        </linearGradient>
+        <linearGradient id="avB2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#b4f562"/>
+          <stop offset="100%" stop-color="#2d9e1b"/>
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" fill="url(#avBg)"/>
+      <path d="M9 22 C9 13 17 9 27 9 C38 9 45 14 45 22 C45 30 38 35 27 35 L19 35 L10 42 L13 33 C10 30 9 26 9 22 Z" fill="url(#avB1)" stroke="#ffffff" stroke-width="2"/>
+      <ellipse cx="26" cy="15" rx="11" ry="3.5" fill="#ffffff" opacity="0.45"/>
+      <path d="M20 38 C20 30 27 25 38 25 C49 25 56 30 56 38 C56 46 49 51 39 51 L48 58 L35 51 C26 51 20 45 20 38 Z" fill="url(#avB2)" stroke="#ffffff" stroke-width="2"/>
+      <ellipse cx="38" cy="31" rx="11" ry="3.5" fill="#ffffff" opacity="0.45"/>
+      <circle cx="32" cy="39" r="2.2" fill="#ffffff"/>
+      <circle cx="38" cy="39" r="2.2" fill="#ffffff"/>
+      <circle cx="44" cy="39" r="2.2" fill="#ffffff"/>
     </svg>`
   },
   {
@@ -30,7 +46,7 @@ export const RETRO_AVATARS = [
   },
   {
     id: 'guitar',
-    name: 'Guitarra Eléctrica Rock',
+    name: 'Guitarra Rock',
     svg: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
       <rect width="48" height="48" fill="#FCE4EC"/>
       <path d="M14 36 C10 32, 10 24, 18 20 C22 18, 26 22, 28 26 C30 34, 20 42, 14 36 Z" fill="#D32F2F"/>
@@ -76,10 +92,46 @@ export const RETRO_AVATARS = [
       <line x1="16" y1="29" x2="8" y2="28" stroke="#795548"/>
       <line x1="32" y1="29" x2="40" y2="28" stroke="#795548"/>
     </svg>`
+  },
+  {
+    id: 'headphones',
+    name: 'Auriculares 2005',
+    svg: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="48" height="48" fill="#E8EAF6"/>
+      <path d="M11 26 C11 14 37 14 37 26" stroke="#1E88E5" stroke-width="4" stroke-linecap="round"/>
+      <rect x="8" y="24" width="7" height="14" rx="3.5" fill="#1565C0"/>
+      <rect x="33" y="24" width="7" height="14" rx="3.5" fill="#1565C0"/>
+      <circle cx="24" cy="30" r="4" fill="#43A047"/>
+    </svg>`
+  },
+  {
+    id: 'star',
+    name: 'Estrella Glossy',
+    svg: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="48" height="48" fill="#FFF3E0"/>
+      <polygon points="24,6 29.5,17.5 42,19 33,28 35,40.5 24,34.5 13,40.5 15,28 6,19 18.5,17.5" fill="#FFB300" stroke="#EF6C00" stroke-width="2"/>
+    </svg>`
   }
 ];
+
+export function isRealPhotoAvatar(avatar) {
+  return typeof avatar === 'string' && (avatar.startsWith('data:image/') || avatar.startsWith('http://') || avatar.startsWith('https://'));
+}
 
 export function getAvatarSvg(avatarId) {
   const item = RETRO_AVATARS.find((a) => a.id === avatarId);
   return item ? item.svg : RETRO_AVATARS[0].svg;
+}
+
+export function AvatarView({ avatar, alt = 'Foto de perfil', className = 'z05-avatar-img' }) {
+  if (isRealPhotoAvatar(avatar)) {
+    return <img src={avatar} alt={alt} className={className} draggable={false} />;
+  }
+  return (
+    <div
+      className={className}
+      style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      dangerouslySetInnerHTML={{ __html: getAvatarSvg(avatar) }}
+    />
+  );
 }

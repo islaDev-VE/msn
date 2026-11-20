@@ -1,6 +1,6 @@
-// MSN Messenger 7.5 Status definitions and SVG icons
+// Zumbido 05 Status definitions, SVG indicators & last-seen formatter
 
-export const MSN_STATUSES = {
+export const USER_STATUSES = {
   online: {
     id: 'online',
     label: 'Conectado',
@@ -59,10 +59,22 @@ export const MSN_STATUSES = {
   },
   offline: {
     id: 'offline',
-    label: 'No conectado',
+    label: 'Sin conexión',
     color: '#9e9e9e',
     iconSvg: `<svg viewBox="0 0 16 16" width="14" height="14">
       <circle cx="8" cy="8" r="6" fill="#bdbdbd" stroke="#757575" stroke-width="1.5"/>
     </svg>`
   }
 };
+
+export function formatLastSeen(ts) {
+  if (!ts) return 'Sin conexión reciente';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 60) return 'últ. vez hace unos segundos';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `últ. vez hace ${diffMin} min`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `últ. vez hace ${diffHours} h`;
+  const d = new Date(ts);
+  return `últ. vez ${d.toLocaleDateString()}`;
+}

@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { getAvatarSvg } from '../../services/avatars';
-import { MSN_STATUSES } from '../../services/statusHelper';
-import { MSN_EMOTICONS, parseTextWithEmoticons } from '../../services/emoticons';
-import { playMessageSound, playNudgeSound } from '../../services/soundEngine';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import DraggableWindow from '../Common/DraggableWindow';
+import { AvatarView } from '../../services/avatars';
+import { RETRO_EMOTICONS } from '../../services/emoticons';
+import { USER_STATUSES, formatLastSeen } from '../../services/statusHelper';
+import { renderFormattedText, stripPlusTags } from '../../services/plusFormatter';
+import { compressChatImage } from '../../services/imageProcessor';
 import WinksOverlay, { WINKS_CATALOG } from './WinksOverlay';
 import InkPad from './InkPad';
 
-const MSN_FONTS = [
+const CHAT_FONTS = [
   'Tahoma',
   'Comic Sans MS, Comic Neue, cursive',
   'Arial',
@@ -14,7 +16,7 @@ const MSN_FONTS = [
   'Courier New'
 ];
 
-const MSN_COLORS = [
+const CHAT_COLORS = [
   '#000000', '#0055ea', '#d32f2f', '#2e7d32',
   '#e65100', '#7b1fa2', '#c2185b', '#00838f',
   '#37474f', '#f57f17', '#1565c0', '#4e342e',
@@ -24,18 +26,27 @@ const MSN_COLORS = [
 export default function ChatWindow({
   contact,
   myProfile,
-  roomId,
-  socket,
-  messages,
+  messages = [],
+  hasMore = false,
+  loadingHistory = false,
+  onLoadMore,
+  isTyping = false,
+  shakingToken = 0,
+  activeWink = null,
+  onClearWink,
+  cooldownNotice = '',
   onSendMessage,
   onSendNudge,
   onSendWink,
-  typingUsers,
   onTypingStatus,
+  onMarkRead,
   onMinimize,
   onClose,
   isFocused,
-  onFocus
+  zIndex,
+  cascadeIndex = 0,
+  onFocus,
+  isMobile
 }) {
   const [inputText, setInputText] = useState('');
   const [selectedFont, setSelectedFont] = useState('Tahoma');
@@ -47,267 +58,344 @@ export default function ChatWindow({
   const [showWinks, setShowWinks] = useState(false);
   const [isInkMode, setIsInkMode] = useState(false);
   const [isShaking, setIsShaking] = useState(false);
-  const [activeWink, setActiveWink] = useState(null);
+  const [transferProgress, setTransferProgress] = useState(null);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+  const [localError, setLocalError] = useState('');
+
+  // Voice clip recording (F2 / mic button)
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordIntervalRef = useRef(null);
 
   const historyEndRef = useRef(null);
   const typingTimerRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const prevLenRef = useRef(0);
 
-  // Auto scroll to bottom
+  // Scroll to bottom when new messages arrive (not when prepending older history)
   useEffect(() => {
-    historyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, activeWink, isInkMode]);
+    if (messages.length > prevLenRef.current) {
+      const added = messages.length - prevLenRef.current;
+      if (added <= 2 || prevLenRef.current === 0) {
+        historyEndRef.current?.scrollIntoView({ behavior: prevLenRef.current === 0 ? 'auto' : 'smooth' });
+      }
+    }
+    prevLenRef.current = messages.length;
+  }, [messages.length]);
 
-  // Handle incoming nudge/wink directly in this conversation
+  // Shake when shakingToken increments
   useEffect(() => {
-    if (!socket) return;
+    if (!shakingToken) return;
+    setIsShaking(true);
+    const t = setTimeout(() => setIsShaking(false), 650);
+    return () => clearTimeout(t);
+  }, [shakingToken]);
 
-    const handleReceiveNudge = (data) => {
-      setIsShaking(true);
-      playNudgeSound();
-      setTimeout(() => setIsShaking(false), 800);
+  // Mark read when focused
+  useEffect(() => {
+    if (isFocused && contact.unreadCount > 0) {
+      onMarkRead?.(contact.id);
+    }
+  }, [isFocused, contact.id, contact.unreadCount, onMarkRead]);
+
+  // Stop voice recording cleanly
+  const stopVoiceRecording = useCallback(() => {
+    if (recordIntervalRef.current) {
+      clearInterval(recordIntervalRef.current);
+      recordIntervalRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  }, []);
+
+  const startVoiceRecording = useCallback(async () => {
+    setLocalError('');
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setLocalError('Tu navegador no soporta grabación de clips de voz en este contexto.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
+      };
+
+      recorder.onstop = () => {
+        stream.getTracks().forEach((tr) => tr.stop());
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        if (blob.size < 200) return;
+
+        setTransferProgress({ label: 'Enviando clip de voz...', percent: 45 });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setTransferProgress({ label: 'Enviando clip de voz...', percent: 100 });
+          onSendMessage({
+            toUserId: contact.id,
+            type: 'voice',
+            text: `Clip de voz (${Math.max(1, recordingSeconds)}s)`,
+            mediaData: reader.result
+          });
+          setTimeout(() => setTransferProgress(null), 400);
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      recordIntervalRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => {
+          if (prev >= 19) {
+            stopVoiceRecording();
+            return 20;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch {
+      setLocalError('No se obtuvo permiso para usar el micrófono.');
+    }
+  }, [contact.id, onSendMessage, recordingSeconds, stopVoiceRecording]);
+
+  // F2 keyboard shortcut for retro Voice Clip recording when chat is focused
+  useEffect(() => {
+    if (!isFocused || isMobile) return;
+    const onKeyDown = (e) => {
+      if (e.key === 'F2' && !e.repeat) {
+        e.preventDefault();
+        if (isRecording) stopVoiceRecording();
+        else startVoiceRecording();
+      }
     };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isFocused, isMobile, isRecording, startVoiceRecording, stopVoiceRecording]);
 
-    const handleReceiveWink = (data) => {
-      setActiveWink({ winkId: data.winkId, from: data.from });
-    };
-
-    socket.on('receive_nudge', handleReceiveNudge);
-    socket.on('receive_wink', handleReceiveWink);
-
+  useEffect(() => {
     return () => {
-      socket.off('receive_nudge', handleReceiveNudge);
-      socket.off('receive_wink', handleReceiveWink);
+      if (recordIntervalRef.current) clearInterval(recordIntervalRef.current);
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     };
-  }, [socket]);
+  }, []);
 
-  // Notify typing
   const handleInputChange = (e) => {
     setInputText(e.target.value);
-
-    onTypingStatus(true);
+    onTypingStatus?.(contact.id, true);
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     typingTimerRef.current = setTimeout(() => {
-      onTypingStatus(false);
+      onTypingStatus?.(contact.id, false);
     }, 1500);
   };
 
   const handleSend = () => {
     if (!inputText.trim()) return;
-
+    setLocalError('');
     onSendMessage({
+      toUserId: contact.id,
+      type: 'text',
       text: inputText,
       font: selectedFont,
       color: selectedColor,
       isBold,
       isItalic
     });
-
     setInputText('');
     setShowEmoticons(false);
     setShowColors(false);
     setShowWinks(false);
-    onTypingStatus(false);
+    onTypingStatus?.(contact.id, false);
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  const handleImagePick = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLocalError('');
+    try {
+      setTransferProgress({ label: `Preparando ${file.name}...`, percent: 30 });
+      const dataUrl = await compressChatImage(file, 800);
+      setTransferProgress({ label: `Transfiriendo ${file.name}...`, percent: 85 });
+      onSendMessage({
+        toUserId: contact.id,
+        type: 'image',
+        text: file.name,
+        mediaData: dataUrl
+      });
+      setTransferProgress({ label: 'Transferencia completada ✓', percent: 100 });
+      setTimeout(() => setTransferProgress(null), 700);
+    } catch (err) {
+      setTransferProgress(null);
+      setLocalError(err.message || 'No se pudo enviar la imagen.');
+    } finally {
+      e.target.value = '';
     }
-  };
-
-  const handleNudgeClick = () => {
-    setIsShaking(true);
-    playNudgeSound();
-    onSendNudge();
-    setTimeout(() => setIsShaking(false), 800);
-  };
-
-  const handleWinkSelect = (winkId) => {
-    setShowWinks(false);
-    setActiveWink({ winkId, from: myProfile });
-    onSendWink(winkId);
   };
 
   const handleSendInk = (inkDataUrl) => {
     onSendMessage({
-      text: '',
-      inkData: inkDataUrl,
-      font: selectedFont,
-      color: selectedColor,
-      isBold: false,
-      isItalic: false
+      toUserId: contact.id,
+      type: 'ink',
+      text: 'Nota manuscrita',
+      mediaData: inkDataUrl
     });
     setIsInkMode(false);
   };
 
-  const insertEmoticon = (code) => {
-    setInputText((prev) => prev + ' ' + code + ' ');
-    setShowEmoticons(false);
-  };
-
-  // Format timestamp (e.g., 16:42:05)
   const formatTime = (ts) => {
     const d = new Date(ts);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // Render message text with parsed emoticons
-  const renderMessageContent = (msg) => {
-    if (msg.inkData) {
-      return (
-        <div>
-          <img src={msg.inkData} alt="Tinta manuscrita de Messenger" className="msn-ink-image" />
-        </div>
-      );
-    }
+  const cleanContactNick = stripPlusTags(contact.nickname);
 
-    const chunks = parseTextWithEmoticons(msg.text || '');
-    return (
-      <span
-        style={{
-          fontFamily: msg.font || 'Tahoma',
-          color: msg.color || '#000000',
-          fontWeight: msg.isBold ? 'bold' : 'normal',
-          fontStyle: msg.isItalic ? 'italic' : 'normal'
-        }}
-      >
-        {chunks.map((chunk, i) => {
-          if (chunk.type === 'emoticon') {
-            return (
-              <span
-                key={i}
-                style={{
-                  fontSize: 14,
-                  verticalAlign: 'middle',
-                  margin: '0 2px'
-                }}
-                title={chunk.data.name}
-              >
-                {chunk.data.render}
-              </span>
-            );
-          }
-          return <span key={i}>{chunk.value}</span>;
-        })}
-      </span>
-    );
-  };
-
-  const isContactTyping = typingUsers.some(
-    (u) => (u.socketId === contact.socketId || u.id === contact.id) && u.isTyping
-  );
+  const initialX = Math.min(365 + cascadeIndex * 28, Math.max(40, window.innerWidth - 530));
+  const initialY = Math.min(36 + cascadeIndex * 26, Math.max(20, window.innerHeight - 520));
 
   return (
-    <div
-      className={`xp-window ${isFocused ? 'focused' : 'inactive'} ${isShaking ? 'shake-nudge' : ''}`}
-      style={{
-        width: 500,
-        height: 480,
-        top: 60,
-        left: 360,
-        zIndex: isFocused ? 250 : 120
-      }}
-      onClick={onFocus}
-    >
-      {/* Titlebar */}
-      <div className="xp-window-titlebar">
-        <div className="xp-window-title">
-          <span>💬</span> {contact.nickname} - Conversación
-        </div>
-        <div className="xp-window-controls">
-          <button className="xp-control-btn xp-btn-min" onClick={onMinimize}>
-            _
-          </button>
-          <button className="xp-control-btn xp-btn-close" onClick={onClose}>
-            ✕
-          </button>
-        </div>
-      </div>
-
-      {/* Menubar */}
-      <div className="xp-menubar">
-        <div className="xp-menu-item">Archivo</div>
-        <div className="xp-menu-item">Editar</div>
-        <div className="xp-menu-item">Acciones</div>
-        <div className="xp-menu-item">Herramientas</div>
-        <div className="xp-menu-item">Ayuda</div>
-      </div>
-
-      <div className="xp-window-body" style={{ position: 'relative' }}>
-        {/* Contact Info Header */}
-        <div className="msn-chat-header">
-          <div className="msn-chat-contact-info">
-            <div
-              className="msn-chat-contact-avatar"
-              dangerouslySetInnerHTML={{ __html: getAvatarSvg(contact.avatar) }}
-            />
-            <div className="msn-chat-contact-text">
-              <div className="msn-chat-contact-name">
-                {contact.nickname} &lt;{contact.email}&gt;
+    <>
+      <DraggableWindow
+        title={`${cleanContactNick} — Conversación`}
+        titleIcon={<span>💬</span>}
+        initialX={initialX}
+        initialY={initialY}
+        width={520}
+        height={510}
+        zIndex={zIndex}
+        isFocused={isFocused}
+        isMobile={isMobile}
+        mobileChatMode={true}
+        extraClassName={isShaking ? 'shake-nudge' : ''}
+        onFocus={onFocus}
+        onMinimize={onMinimize}
+        onClose={onClose}
+      >
+        {/* Header with Contact Photo & Back button on Mobile */}
+        <div className="z05-chat-header">
+          <div className="z05-chat-contact-info">
+            <button type="button" className="z05-mobile-back-btn" onClick={onClose}>
+              ← Atrás
+            </button>
+            <div className="z05-chat-contact-avatar">
+              <AvatarView avatar={contact.avatar} alt={cleanContactNick} />
+            </div>
+            <div className="z05-chat-contact-text">
+              <div className="z05-chat-contact-name">
+                {renderFormattedText(contact.nickname, `hdr-${contact.id}`)}
               </div>
-              <div className="msn-chat-contact-sub">
-                {contact.personalMessage || 'Sin mensaje personal'}
+              <div className="z05-chat-contact-sub">
+                {contact.isOnline
+                  ? (contact.personalMessage
+                      ? renderFormattedText(contact.personalMessage, `hdr-msg-${contact.id}`)
+                      : `${USER_STATUSES[contact.status]?.label || 'Conectado'} • ${contact.email}`)
+                  : `Sin conexión (${formatLastSeen(contact.lastSeen)}) — los mensajes llegarán al conectarse`}
               </div>
             </div>
           </div>
 
-          <div className="msn-chat-actions-bar">
-            <button className="msn-action-btn" title="Iniciar llamada de audio">
-              📞 Llamar
-            </button>
-            <button className="msn-action-btn" title="Iniciar videollamada web">
-              📹 Vídeo
-            </button>
-            <button className="msn-action-btn" title="Enviar archivos o fotos">
-              📁 Archivos
-            </button>
-            <button className="msn-action-btn" title="Jugar Buscaminas o Tres en raya">
-              🎮 Juegos
-            </button>
+          <div className="z05-chat-contact-avatar" style={{ width: 34, height: 34 }} title="Tu foto">
+            <AvatarView avatar={myProfile.avatar} alt="Mi foto" />
           </div>
         </div>
 
-        {/* Chat History Pane */}
-        <div className="msn-chat-history">
-          <div className="msn-system-msg">
-            Has iniciado una conversación con {contact.nickname}. No compartas contraseñas ni información confidencial.
-          </div>
+        {/* Chat History */}
+        <div className="z05-chat-history" style={{ position: 'relative' }}>
+          {hasMore && (
+            <button
+              type="button"
+              className="c05-btn z05-load-more-btn"
+              disabled={loadingHistory}
+              onClick={() => onLoadMore?.(contact.id)}
+            >
+              {loadingHistory ? 'Cargando...' : '▲ Cargar mensajes anteriores'}
+            </button>
+          )}
+
+          {messages.length === 0 && !loadingHistory && (
+            <div className="z05-system-msg">
+              Conversación privada con {cleanContactNick}. El historial se guarda automáticamente.
+            </div>
+          )}
 
           {messages.map((m) => {
+            const isMe = m.fromUserId === myProfile.id;
+            const senderNick = isMe ? myProfile.nickname : contact.nickname;
+
             if (m.type === 'nudge') {
               return (
-                <div key={m.id} className="msn-nudge-msg">
+                <div key={m.id} className="z05-nudge-msg">
                   <span>⚡</span>
-                  {m.from.socketId === myProfile.socketId ? (
-                    <span>¡Acabas de enviar un zumbido!</span>
-                  ) : (
-                    <span>¡{m.from.nickname} te acaba de enviar un zumbido!</span>
-                  )}
+                  <span>
+                    {isMe
+                      ? '¡Acabas de enviar un zumbido!'
+                      : `¡${stripPlusTags(senderNick)} te acaba de enviar un zumbido!`}
+                  </span>
                 </div>
               );
             }
 
             if (m.type === 'wink') {
               return (
-                <div key={m.id} className="msn-system-msg" style={{ color: '#0055ea', fontWeight: 'bold' }}>
-                  ✨ {m.from.nickname} ha enviado un guiño interactivo.
+                <div key={m.id} className="z05-system-msg" style={{ color: '#0055ea', fontWeight: 'bold' }}>
+                  ✨ {stripPlusTags(senderNick)} envió un guiño animado ({m.mediaData || m.text}).
                 </div>
               );
             }
 
-            const isMe = m.from?.socketId === myProfile.socketId;
-
             return (
-              <div key={m.id} className="msn-msg-row">
-                <span className="msn-msg-time">[{formatTime(m.timestamp)}]</span>
-                <span
-                  className="msn-msg-sender"
-                  style={{ color: isMe ? '#0055ea' : '#d32f2f' }}
-                >
-                  {m.from?.nickname || 'Contacto'}:
+              <div key={m.id} className="z05-msg-row">
+                <span className="z05-msg-time">[{formatTime(m.timestamp)}]</span>
+                <span className="z05-msg-sender" style={{ color: isMe ? '#0055ea' : '#c62828' }}>
+                  {renderFormattedText(senderNick, `snd-${m.id}`)}:
                 </span>
-                {renderMessageContent(m)}
+
+                {m.type === 'ink' && m.mediaData && (
+                  <div>
+                    <img src={m.mediaData} alt="Tinta manuscrita" className="z05-ink-image" />
+                  </div>
+                )}
+
+                {m.type === 'image' && m.mediaData && (
+                  <div>
+                    <img
+                      src={m.mediaData}
+                      alt={m.text || 'Foto enviada'}
+                      className="z05-chat-photo"
+                      onClick={() => setLightboxSrc(m.mediaData)}
+                      title="Clic para ampliar"
+                    />
+                  </div>
+                )}
+
+                {m.type === 'voice' && m.mediaData && (
+                  <div className="z05-voice-player">
+                    <span>🎙️</span>
+                    <audio controls preload="metadata" src={m.mediaData} />
+                  </div>
+                )}
+
+                {m.type === 'text' && (
+                  <span
+                    style={{
+                      fontFamily: m.font || 'Tahoma',
+                      color: m.color || '#000000',
+                      fontWeight: m.isBold ? 'bold' : 'normal',
+                      fontStyle: m.isItalic ? 'italic' : 'normal'
+                    }}
+                  >
+                    {renderFormattedText(m.text, `txt-${m.id}`)}
+                  </span>
+                )}
               </div>
             );
           })}
@@ -315,115 +403,162 @@ export default function ChatWindow({
           <div ref={historyEndRef} />
         </div>
 
-        {/* Typing indicator */}
-        <div className="msn-typing-indicator">
-          {isContactTyping && `✎ ${contact.nickname} está escribiendo un mensaje...`}
+        {/* Retro File Transfer Progress */}
+        {transferProgress && (
+          <div className="z05-transfer-progress">
+            <div>📁 {transferProgress.label} ({transferProgress.percent}%)</div>
+            <div className="z05-progress-track">
+              <div className="z05-progress-bar" style={{ width: `${transferProgress.percent}%` }} />
+            </div>
+          </div>
+        )}
+
+        {/* Cooldown / Error / Typing Bar */}
+        <div className="z05-typing-indicator">
+          {localError ? (
+            <span style={{ color: '#c62828', fontStyle: 'normal' }}>⚠️ {localError}</span>
+          ) : cooldownNotice ? (
+            <span style={{ color: '#b71c1c', fontStyle: 'normal' }}>⏳ {cooldownNotice}</span>
+          ) : isTyping ? (
+            `✎ ${cleanContactNick} está escribiendo un mensaje...`
+          ) : null}
         </div>
 
-        {/* Formatting Toolbar */}
-        <div className="msn-chat-toolbar">
-          {/* Font Picker */}
+        {/* Toolbar */}
+        <div className="z05-chat-toolbar">
           <select
-            className="xp-input"
-            style={{ fontSize: 10, height: 22, maxWidth: 105, padding: '1px 3px' }}
+            className="c05-input"
+            style={{ fontSize: 11, height: 26, maxWidth: 100, padding: '1px 4px' }}
             value={selectedFont}
             onChange={(e) => setSelectedFont(e.target.value)}
+            title="Fuente"
           >
-            {MSN_FONTS.map((f) => (
+            {CHAT_FONTS.map((f) => (
               <option key={f} value={f}>
                 {f.split(',')[0]}
               </option>
             ))}
           </select>
 
-          {/* Color Picker Toggle */}
           <button
             type="button"
-            className="msn-tool-btn"
-            onClick={() => setShowColors(!showColors)}
+            className="z05-tool-btn"
+            onClick={() => {
+              setShowColors((v) => !v);
+              setShowEmoticons(false);
+              setShowWinks(false);
+            }}
             title="Color de texto"
           >
-            <div className="msn-color-dot" style={{ backgroundColor: selectedColor }} />
+            <div className="z05-color-dot" style={{ backgroundColor: selectedColor }} />
           </button>
 
-          {/* Bold */}
           <button
             type="button"
-            className={`msn-tool-btn ${isBold ? 'active' : ''}`}
-            onClick={() => setIsBold(!isBold)}
+            className={`z05-tool-btn ${isBold ? 'active' : ''}`}
+            onClick={() => setIsBold((b) => !b)}
             style={{ fontWeight: 'bold' }}
             title="Negrita"
           >
             N
           </button>
 
-          {/* Italic */}
           <button
             type="button"
-            className={`msn-tool-btn ${isItalic ? 'active' : ''}`}
-            onClick={() => setIsItalic(!isItalic)}
+            className={`z05-tool-btn ${isItalic ? 'active' : ''}`}
+            onClick={() => setIsItalic((i) => !i)}
             style={{ fontStyle: 'italic', fontFamily: 'serif' }}
             title="Cursiva"
           >
             C
           </button>
 
-          <div style={{ width: 1, height: 16, background: '#ccc', margin: '0 2px' }} />
-
-          {/* Emoticons Picker Toggle */}
           <button
             type="button"
-            className="msn-tool-btn"
-            onClick={() => setShowEmoticons(!showEmoticons)}
-            title="Insertar emoticonos clásicos de MSN"
+            className="z05-tool-btn"
+            onClick={() => {
+              setShowEmoticons((v) => !v);
+              setShowColors(false);
+              setShowWinks(false);
+            }}
+            title="Emoticonos"
           >
             😊
           </button>
 
-          {/* Guiños / Winks Toggle */}
           <button
             type="button"
-            className="msn-tool-btn"
-            onClick={() => setShowWinks(!showWinks)}
-            title="Enviar un guiño animado"
+            className="z05-tool-btn"
+            onClick={() => {
+              setShowWinks((v) => !v);
+              setShowEmoticons(false);
+              setShowColors(false);
+            }}
+            title="Guiños animados"
           >
             ✨
           </button>
 
-          {/* ZUMBIDO / NUDGE BUTTON */}
           <button
             type="button"
-            className="msn-tool-btn"
-            onClick={handleNudgeClick}
-            style={{ color: '#d32f2f', fontWeight: 'bold' }}
-            title="¡Enviar un Zumbido! (Sacude la pantalla)"
+            className="z05-tool-btn"
+            style={{ color: '#c62828', fontWeight: 'bold' }}
+            onClick={() => onSendNudge?.(contact.id)}
+            title="Enviar Zumbido"
           >
             ⚡ Zumbido
           </button>
 
-          {/* TINTA MANUSCRITA / INK TOGGLE */}
           <button
             type="button"
-            className={`msn-tool-btn ${isInkMode ? 'active' : ''}`}
-            onClick={() => setIsInkMode(!isInkMode)}
-            title="Tinta manuscrita (Dibujar a mano)"
+            className="z05-tool-btn"
+            onClick={() => imageInputRef.current?.click()}
+            title="Enviar foto en el chat"
           >
-            ✍️ Tinta
+            📷
+          </button>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleImagePick}
+          />
+
+          <button
+            type="button"
+            className={`z05-tool-btn ${isRecording ? 'recording' : ''}`}
+            onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+            title="Clip de voz (también con tecla F2)"
+          >
+            {isRecording ? `⏹ ${recordingSeconds}s` : '🎙️ Voz'}
+          </button>
+
+          <button
+            type="button"
+            className={`z05-tool-btn ${isInkMode ? 'active' : ''}`}
+            onClick={() => setIsInkMode((v) => !v)}
+            title="Tinta manuscrita"
+          >
+            ✍️
           </button>
         </div>
 
-        {/* Emoticons Popup Grid */}
+        {/* Emoticons Popup */}
         {showEmoticons && (
-          <div className="msn-popup-panel" style={{ bottom: 70, left: 60 }}>
-            <div style={{ fontSize: 10, fontWeight: 'bold', marginBottom: 4, color: '#0b3474' }}>
-              Emoticonos de MSN Messenger:
+          <div className="z05-popup-panel" style={{ bottom: 80, left: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 'bold', marginBottom: 4, color: '#0b3474' }}>
+              Emoticonos clásicos:
             </div>
-            <div className="msn-emoticons-grid">
-              {MSN_EMOTICONS.map((emo) => (
+            <div className="z05-emoticons-grid">
+              {RETRO_EMOTICONS.map((emo) => (
                 <div
                   key={emo.code}
-                  className="msn-emoticon-choice"
-                  onClick={() => insertEmoticon(emo.code)}
+                  className="z05-emoticon-choice"
+                  onClick={() => {
+                    setInputText((prev) => `${prev}${prev ? ' ' : ''}${emo.code} `);
+                    setShowEmoticons(false);
+                  }}
                   title={`${emo.name} (${emo.code})`}
                 >
                   {emo.render}
@@ -433,17 +568,17 @@ export default function ChatWindow({
           </div>
         )}
 
-        {/* Color Palette Popup Grid */}
+        {/* Colors Popup */}
         {showColors && (
-          <div className="msn-popup-panel" style={{ bottom: 70, left: 100 }}>
-            <div style={{ fontSize: 10, fontWeight: 'bold', marginBottom: 4, color: '#0b3474' }}>
-              Selecciona color de fuente:
+          <div className="z05-popup-panel" style={{ bottom: 80, left: 80 }}>
+            <div style={{ fontSize: 11, fontWeight: 'bold', marginBottom: 4, color: '#0b3474' }}>
+              Color de fuente:
             </div>
-            <div className="msn-colors-grid">
-              {MSN_COLORS.map((c) => (
+            <div className="z05-colors-grid">
+              {CHAT_COLORS.map((c) => (
                 <div
                   key={c}
-                  className="msn-color-choice"
+                  className="z05-color-choice"
                   style={{ backgroundColor: c }}
                   onClick={() => {
                     setSelectedColor(c);
@@ -455,22 +590,25 @@ export default function ChatWindow({
           </div>
         )}
 
-        {/* Winks Selector Popup */}
+        {/* Winks Popup */}
         {showWinks && (
-          <div className="msn-popup-panel" style={{ bottom: 70, left: 140 }}>
-            <div style={{ fontSize: 10, fontWeight: 'bold', marginBottom: 4, color: '#0b3474' }}>
-              Elige un guiño animado:
+          <div className="z05-popup-panel" style={{ bottom: 80, left: 120 }}>
+            <div style={{ fontSize: 11, fontWeight: 'bold', marginBottom: 4, color: '#0b3474' }}>
+              Enviar un guiño animado:
             </div>
-            <div className="msn-winks-grid">
+            <div className="z05-winks-grid">
               {WINKS_CATALOG.map((w) => (
                 <div
                   key={w.id}
-                  className="msn-wink-choice"
-                  onClick={() => handleWinkSelect(w.id)}
+                  className="z05-wink-choice"
+                  onClick={() => {
+                    setShowWinks(false);
+                    onSendWink?.(contact.id, w.id);
+                  }}
                 >
-                  <span style={{ fontSize: 20 }}>{w.icon}</span>
+                  <span style={{ fontSize: 22 }}>{w.icon}</span>
                   <strong>{w.name}</strong>
-                  <span style={{ fontSize: 9, color: '#666' }}>{w.desc}</span>
+                  <span style={{ fontSize: 10, color: '#666' }}>{w.desc}</span>
                 </div>
               ))}
             </div>
@@ -481,22 +619,30 @@ export default function ChatWindow({
         {isInkMode ? (
           <InkPad onSendInk={handleSendInk} onCancel={() => setIsInkMode(false)} />
         ) : (
-          <div className="msn-chat-input-area">
+          <div className="z05-chat-input-area">
             <textarea
-              className="msn-chat-textarea"
+              className="z05-chat-textarea"
               style={{
                 fontFamily: selectedFont,
                 color: selectedColor,
                 fontWeight: isBold ? 'bold' : 'normal',
                 fontStyle: isItalic ? 'italic' : 'normal'
               }}
-              placeholder="Escribe un mensaje aquí... (Presiona Enter para enviar)"
+              placeholder={contact.isBlocked ? 'Contacto bloqueado' : 'Escribe un mensaje... (Enter para enviar)'}
               value={inputText}
+              disabled={contact.isBlocked}
               onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
             />
             <button
-              className="xp-btn xp-btn-primary msn-send-btn"
+              type="button"
+              className="c05-btn c05-btn-primary z05-send-btn"
+              disabled={contact.isBlocked || !inputText.trim()}
               onClick={handleSend}
             >
               Enviar
@@ -504,9 +650,15 @@ export default function ChatWindow({
           </div>
         )}
 
-        {/* Active Wink Animation Overlay */}
-        <WinksOverlay activeWink={activeWink} onWinkFinish={() => setActiveWink(null)} />
-      </div>
-    </div>
+        <WinksOverlay activeWink={activeWink} onWinkFinish={() => onClearWink?.(contact.id)} />
+      </DraggableWindow>
+
+      {/* Photo Lightbox */}
+      {lightboxSrc && (
+        <div className="z05-lightbox" onClick={() => setLightboxSrc(null)}>
+          <img src={lightboxSrc} alt="Imagen ampliada" />
+        </div>
+      )}
+    </>
   );
 }
