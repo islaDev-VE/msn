@@ -3,6 +3,10 @@ dist
 data
 .git
 .env
+.venv
+venv
+__pycache__
+*.pyc
 *.log
 *.db
 *.db-wal

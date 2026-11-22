@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { io } from 'socket.io-client';
 
-const TEST_PORT = 3456;
+const TEST_PORT = 8456;
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zumbido05-test-'));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zumbido05-py-test-'));
 const dbPath = path.join(tmpDir, 'test.db');
 
 const TINY_PNG_DATA_URL =
@@ -15,7 +15,7 @@ const TINY_PNG_DATA_URL =
 const TINY_AUDIO_DATA_URL =
   'data:audio/webm;base64,GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYECGFOAZwH/////////';
 
-async function waitForServer(timeoutMs = 8000) {
+async function waitForServer(timeoutMs = 10000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -26,7 +26,7 @@ async function waitForServer(timeoutMs = 8000) {
     }
     await new Promise((res) => setTimeout(res, 150));
   }
-  throw new Error('Server failed to start within timeout');
+  throw new Error('Python FastAPI server failed to start within timeout');
 }
 
 async function apiReq(urlPath, { method = 'GET', token = null, body = null } = {}) {
@@ -49,15 +49,20 @@ function connectClient(token) {
   });
 }
 
-const serverProc = spawn(process.execPath, ['server.js'], {
-  env: {
-    ...process.env,
-    PORT: String(TEST_PORT),
-    DB_PATH: dbPath,
-    JWT_SECRET: 'super-secret-integration-test-key-2026'
-  },
-  stdio: ['ignore', 'pipe', 'pipe']
-});
+const pythonBin = fs.existsSync('.venv/bin/python') ? '.venv/bin/python' : 'python3';
+const serverProc = spawn(
+  pythonBin,
+  ['-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', String(TEST_PORT)],
+  {
+    env: {
+      ...process.env,
+      PORT: String(TEST_PORT),
+      DATABASE_URL: `sqlite:///${dbPath}`,
+      JWT_SECRET: 'super-secret-python-integration-test-key-2026'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  }
+);
 
 let serverStderr = '';
 serverProc.stderr.on('data', (d) => { serverStderr += d.toString(); });
@@ -66,7 +71,8 @@ try {
   const health = await waitForServer();
   assert.equal(health.status, 'ok');
   assert.equal(health.service, 'zumbido-05');
-  console.log('✓ 1. Health endpoint OK');
+  assert.equal(health.runtime, 'python-fastapi');
+  console.log('✓ 1. Python FastAPI health endpoint OK');
 
   // 2. PWA & Static endpoints
   for (const asset of ['/manifest.json', '/sw.js', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png']) {
@@ -149,7 +155,7 @@ try {
   assert.equal(groupRes.data.friends[0].groupName, 'Familia');
   console.log('✓ 4. Friend requests, acceptance & custom group update OK');
 
-  // 5. Real-time Socket.io JWT messaging: text, image, voice, ink, wink, nudge + cooldown
+  // 5. Real-time python-socketio + JS socket.io-client JWT messaging
   const anaSocket = await connectClient(anaToken);
   const luisSocket = await connectClient(luisToken);
 
@@ -166,7 +172,7 @@ try {
   const m1 = await emitAck(anaSocket, 'send_message', {
     toUserId: luisId,
     type: 'text',
-    text: '¡Hola Luis desde Zumbido 05! :)',
+    text: '¡Hola Luis desde Python FastAPI + Zumbido 05! :)',
     font: 'Comic Sans MS',
     color: '#0055ea',
     isBold: true
@@ -203,7 +209,6 @@ try {
   const n1 = await emitAck(anaSocket, 'send_nudge', { toUserId: luisId });
   assert.equal(n1.ok, true);
 
-  // Immediate second nudge must hit 5s cooldown
   const n2 = await emitAck(anaSocket, 'send_nudge', { toUserId: luisId });
   assert.equal(n2.cooldown, true);
 
@@ -215,7 +220,7 @@ try {
 
   // 6. Persistence, unread count, pagination & mark-read
   const luisFriendsUnread = await apiReq('/api/friends', { token: luisToken });
-  assert.equal(luisFriendsUnread.data.friends[0].unreadCount, 6); // 4 msgs + 1 wink + 1 nudge
+  assert.equal(luisFriendsUnread.data.friends[0].unreadCount, 6);
 
   const page1 = await apiReq(`/api/messages/${anaId}?limit=3`, { token: luisToken });
   assert.equal(page1.status, 200);
@@ -231,7 +236,7 @@ try {
   assert.equal(readRes.status, 200);
   const luisFriendsAfterRead = await apiReq('/api/friends', { token: luisToken });
   assert.equal(luisFriendsAfterRead.data.friends[0].unreadCount, 0);
-  console.log('✓ 6. SQLite WAL persistence, pagination, unread count & mark-read OK');
+  console.log('✓ 6. SQLAlchemy SQLite WAL persistence, pagination, unread count & mark-read OK');
 
   // 7. Block contact prevents messaging
   const blockRes = await apiReq(`/api/friends/${anaId}/block`, {
@@ -251,7 +256,7 @@ try {
 
   anaSocket.disconnect();
   luisSocket.disconnect();
-  console.log('\nALL E2E INTEGRATION TESTS PASSED! 🎉');
+  console.log('\nALL PYTHON FASTAPI + SOCKET.IO E2E TESTS PASSED! 🎉');
 } catch (err) {
   console.error('E2E TEST FAILED:', err);
   if (serverStderr) console.error('Server stderr:', serverStderr);

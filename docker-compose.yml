@@ -4,11 +4,11 @@ services:
     container_name: zumbido-05
     restart: unless-stopped
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-8000}:8000"
     environment:
-      NODE_ENV: production
-      PORT: 3000
-      DB_PATH: /app/data/zumbido05.db
+      APP_ENV: production
+      PORT: 8000
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/data/zumbido05.db}
       JWT_SECRET: ${JWT_SECRET:-cambia-esta-clave-en-produccion}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
     volumes:

@@ -35,7 +35,8 @@ async function request(path, options = {}) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error(data.error || `Error ${res.status}`);
+    const detailMsg = typeof data.detail === 'string' ? data.detail : null;
+    const err = new Error(data.error || detailMsg || `Error ${res.status}`);
     err.status = res.status;
     throw err;
   }

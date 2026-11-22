@@ -2,6 +2,11 @@ node_modules
 dist
 data
 .env
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
 *.db
 *.db-wal
 *.db-shm

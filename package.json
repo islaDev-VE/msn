@@ -1,27 +1,19 @@
 {
-  "name": "zumbido-05",
+  "name": "zumbido-05-frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Zumbido 05 - Mensajeria instantanea retro PWA estilo 2005 con SQLite, usuarios reales, fotos de perfil, zumbidos, guinos, tinta y clips de voz.",
+  "description": "Zumbido 05 - Frontend PWA React + Vite (servido por backend Python FastAPI + python-socketio)",
   "scripts": {
     "dev": "vite",
-    "server": "node server.js",
-    "start": "node server.js",
     "build": "vite build",
     "preview": "vite preview",
-    "test:integration": "node scripts/verify-e2e.mjs"
+    "test:e2e": "node scripts/verify-e2e.mjs"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "jsonwebtoken": "^9.0.2",
     "lucide-react": "^1.16.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
   },
   "devDependencies": {

@@ -1,31 +1,35 @@
-# Stage 1: Build Frontend
-FROM node:24-alpine AS builder
+# Stage 1: Build React + Vite PWA Frontend
+FROM node:24-alpine AS frontend-builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
-COPY . .
+COPY index.html vite.config.js ./
+COPY public ./public
+COPY src ./src
 RUN npm run build
 
-# Stage 2: Production Server
-FROM node:24-alpine
+# Stage 2: Production Python FastAPI + python-socketio Server
+FROM python:3.11-slim
 WORKDIR /app
-ENV NODE_ENV=production
-ENV PORT=3000
-ENV DB_PATH=/app/data/zumbido05.db
 
-COPY package*.json ./
-RUN npm ci --omit=dev
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    APP_ENV=production \
+    PORT=8000 \
+    DATABASE_URL=sqlite:////app/data/zumbido05.db
 
-COPY server.js ./
-COPY src/server ./src/server
-COPY --from=builder /app/dist ./dist
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN mkdir -p /app/data && chown -R node:node /app
-USER node
+COPY backend ./backend
+COPY --from=frontend-builder /app/dist ./dist
 
-EXPOSE 3000
+RUN mkdir -p /app/data && useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/health || exit 1
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" || exit 1
 
-CMD ["node", "server.js"]
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
