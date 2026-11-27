@@ -1,14 +1,15 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import ZumbidoLogo from '../Common/ZumbidoLogo';
 import DraggableWindow from '../Common/DraggableWindow';
 import { RETRO_AVATARS, AvatarView } from '../../services/avatars';
 import { USER_STATUSES } from '../../services/statusHelper';
 import { compressAvatar } from '../../services/imageProcessor';
+import { renderFormattedText } from '../../services/plusFormatter';
 import { api } from '../../services/api';
 import { initAudio, playLoginSound } from '../../services/soundEngine';
 
-export default function AuthModal({ onAuthenticated, onOpenAbout, isMobile }) {
-  const [mode, setMode] = useState('login'); // 'login' | 'register'
+export default function AuthModal({ onAuthenticated, onOpenAbout, isMobile, inviteCode = null }) {
+  const [mode, setMode] = useState(inviteCode ? 'register' : 'login'); // 'login' | 'register'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [nickname, setNickname] = useState('');
@@ -17,8 +18,37 @@ export default function AuthModal({ onAuthenticated, onOpenAbout, isMobile }) {
   const [avatar, setAvatar] = useState('bubbles');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [inviteInfo, setInviteInfo] = useState(null);
+  const [inviteNotice, setInviteNotice] = useState('');
 
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!inviteCode) {
+      setInviteInfo(null);
+      setInviteNotice('');
+      return;
+    }
+    let cancelled = false;
+    api.getInvitation(inviteCode)
+      .then((info) => {
+        if (cancelled) return;
+        setInviteInfo(info);
+        setInviteNotice('');
+        setMode('register');
+        if (info.invitedEmail) {
+          setEmail((prev) => prev || info.invitedEmail);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInviteInfo(null);
+        setInviteNotice('El enlace de invitación no es válido o fue revocado, pero igual puedes crear tu cuenta.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteCode]);
 
   const cycleRetroAvatar = () => {
     const idx = RETRO_AVATARS.findIndex((a) => a.id === avatar);
@@ -55,13 +85,14 @@ export default function AuthModal({ onAuthenticated, onOpenAbout, isMobile }) {
           nickname: nickname.trim() || email.split('@')[0],
           personalMessage,
           avatar,
-          status
+          status,
+          inviteCode: inviteInfo ? inviteInfo.code : undefined
         });
       } else {
         res = await api.login({ email, password, status });
       }
       playLoginSound();
-      onAuthenticated(res.token, res.user);
+      onAuthenticated(res.token, res.user, res.invitedBy || null);
     } catch (err) {
       setError(err.message || 'No se pudo completar la operación.');
     } finally {
@@ -119,6 +150,27 @@ export default function AuthModal({ onAuthenticated, onOpenAbout, isMobile }) {
       </div>
 
       <form onSubmit={handleSubmit} className="z05-login-body">
+        {inviteInfo?.inviter && (
+          <div className="z05-invite-banner">
+            <div className="z05-buddy-mini-avatar" style={{ flexShrink: 0 }}>
+              <AvatarView avatar={inviteInfo.inviter.avatar} alt={inviteInfo.inviter.nickname} />
+            </div>
+            <div>
+              <div>
+                <strong>
+                  {renderFormattedText(inviteInfo.inviter.nickname, 'inviter-nick')}
+                </strong>{' '}
+                te invitó a chatear en <strong>Zumbido 05</strong>.
+              </div>
+              <div style={{ fontSize: 10, color: '#2b4f82', marginTop: 2 }}>
+                {mode === 'register'
+                  ? 'Crea tu cuenta y quedarán conectados como amigos al instante.'
+                  : 'Inicia sesión y se agregará automáticamente a tu lista.'}
+              </div>
+            </div>
+          </div>
+        )}
+        {inviteNotice && <div className="z05-invite-callout">ℹ️ {inviteNotice}</div>}
         {error && <div className="z05-alert-error">⚠️ {error}</div>}
 
         {mode === 'register' && (
@@ -253,8 +305,16 @@ export default function AuthModal({ onAuthenticated, onOpenAbout, isMobile }) {
         </div>
 
         <div className="z05-disclaimer-note">
-          Zumbido 05 es un proyecto independiente inspirado en la estética de mensajería de los
-          2000s. No está afiliado a ninguna marca comercial.
+          Hecho con ❤️ por{' '}
+          <a
+            href="https://isladev.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: '#0055ea', fontWeight: 'bold', textDecoration: 'none' }}
+          >
+            islaDev
+          </a>{' '}
+          (isladev.com) • Proyecto independiente inspirado en la mensajería de los 2000s.
         </div>
       </form>
     </DraggableWindow>

@@ -1,3 +1,4 @@
+import asyncio
 import math
 from typing import Optional
 
@@ -11,30 +12,45 @@ from backend.config import (
     ALLOWED_STATUSES,
     CORS_ORIGIN,
     DIST_DIR,
+    OFFLINE_GRACE_SECONDS,
     PORT,
 )
 from backend.database import (
     accept_friend_request,
     create_friend_request,
+    create_or_get_invitation,
     create_user,
+    delete_invitation,
+    delete_push_subscription,
     did_user_block,
     get_accepted_friend_ids,
     get_conversation_messages,
     get_friends_bundle,
     get_friendship,
+    get_invitation_by_code,
     get_user_by_email_raw,
     get_user_by_id,
+    get_user_push_subscriptions,
     init_db,
     is_blocked_between,
+    list_user_invitations,
     mark_conversation_read,
     now_ms,
+    redeem_invitation,
     remove_friendship,
     sanitize_user,
     save_message,
+    save_push_subscription,
     set_friend_blocked,
     touch_user_last_seen,
     update_friend_group,
     update_user_profile,
+)
+from backend.push import (
+    get_vapid_public_key,
+    schedule_push_to_user,
+    send_push_to_user,
+    strip_plus_tags,
 )
 from backend.security import (
     api_limiter,
@@ -80,14 +96,19 @@ sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins="*" if CORS_ORIGIN == "*" else cors_origins,
     max_http_buffer_size=4 * 1024 * 1024,
+    ping_interval=20,
+    ping_timeout=25,
 )
 
 # Active connected sockets per userId: dict[int, set[str]]
 user_sockets: dict[int, set[str]] = {}
+# Delayed offline tasks so brief mobile screen locks / network switches don't flap presence
+pending_offline_tasks: dict[int, asyncio.Task] = {}
 
 
 def get_online_user_ids() -> set[int]:
-    return {uid for uid, sids in user_sockets.items() if len(sids) > 0}
+    active = {uid for uid, sids in user_sockets.items() if len(sids) > 0}
+    return active | set(pending_offline_tasks.keys())
 
 
 async def emit_to_user(user_id: int, event_name: str, payload: dict):
@@ -162,6 +183,7 @@ class RegisterPayload(BaseModel):
     personalMessage: Optional[str] = ""
     avatar: Optional[str] = "bubbles"
     status: Optional[str] = "online"
+    inviteCode: Optional[str] = None
 
 
 class LoginPayload(BaseModel):
@@ -192,6 +214,25 @@ class FriendGroupPayload(BaseModel):
 
 class FriendBlockPayload(BaseModel):
     blocked: bool
+
+
+class InvitationCreatePayload(BaseModel):
+    email: Optional[str] = None
+    regenerate: bool = False
+
+
+class PushKeysPayload(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscribePayload(BaseModel):
+    endpoint: str
+    keys: PushKeysPayload
+
+
+class PushUnsubscribePayload(BaseModel):
+    endpoint: str
 
 
 # ========================
@@ -250,8 +291,33 @@ async def register(payload: RegisterPayload, request: Request):
         avatar=safe_avatar,
         status=safe_status,
     )
+
+    invited_by = None
+    if payload.inviteCode and payload.inviteCode.strip():
+        redeemed = redeem_invitation(payload.inviteCode.strip(), user["id"])
+        if redeemed and not redeemed.get("selfInvite") and redeemed.get("inviter"):
+            invited_by = redeemed["inviter"]
+            inviter_id = invited_by["id"]
+            inviter_bundle = get_friends_bundle(inviter_id, get_online_user_ids())
+            await emit_to_user(
+                inviter_id,
+                "invite_joined",
+                {"user": user, "bundle": inviter_bundle},
+            )
+            schedule_push_to_user(
+                inviter_id,
+                title=f"🎉 {strip_plus_tags(user['nickname'])} aceptó tu invitación",
+                body="Se unió a Zumbido 05 y ya está en tu lista de contactos.",
+                url=f"/?chat={user['id']}",
+                tag=f"z05-invite-{user['id']}",
+                data={"kind": "invite_joined", "friendId": user["id"]},
+            )
+
     token = sign_token(user)
-    return JSONResponse(status_code=201, content={"token": token, "user": user})
+    return JSONResponse(
+        status_code=201,
+        content={"token": token, "user": user, "invitedBy": invited_by},
+    )
 
 
 @fastapi_app.post("/api/auth/login")
@@ -344,7 +410,14 @@ async def request_friend(
 
     target_raw = get_user_by_email_raw(payload.email)
     if not target_raw:
-        return JSONResponse(status_code=404, content={"error": "No existe ningún usuario registrado con ese correo."})
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "No existe ningún usuario registrado con ese correo.",
+                "code": "USER_NOT_FOUND",
+                "email": payload.email.strip().lower(),
+            },
+        )
     if target_raw.id == user["id"]:
         return JSONResponse(status_code=400, content={"error": "No puedes agregarte a ti mismo como contacto."})
 
@@ -370,6 +443,14 @@ async def request_friend(
                 "createdAt": now_ms(),
             }
         },
+    )
+    schedule_push_to_user(
+        target_raw.id,
+        title="👥 Nueva solicitud en Zumbido 05",
+        body=f"{strip_plus_tags(user['nickname'])} quiere agregarte como contacto.",
+        url="/",
+        tag=f"z05-req-{user['id']}",
+        data={"kind": "friend_request", "fromUserId": user["id"]},
     )
 
     bundle = get_friends_bundle(user["id"], get_online_user_ids())
@@ -454,6 +535,117 @@ async def delete_friend(friend_id: int, user: Optional[dict] = Depends(require_u
     return bundle
 
 
+# --- INVITATIONS ---
+
+@fastapi_app.get("/api/invitations")
+async def get_my_invitations(user: Optional[dict] = Depends(require_user)):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    # Ensure personal general invitation link always exists
+    personal = create_or_get_invitation(user["id"], invited_email=None, regenerate=False)
+    return {
+        "personal": personal,
+        "invitations": list_user_invitations(user["id"]),
+    }
+
+
+@fastapi_app.post("/api/invitations")
+async def create_invitation_endpoint(
+    payload: InvitationCreatePayload,
+    request: Request,
+    user: Optional[dict] = Depends(require_user),
+):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    if not api_limiter.allow(client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "Límite temporal de peticiones alcanzado."})
+
+    clean_email = payload.email.strip().lower() if (payload.email and payload.email.strip()) else None
+    if clean_email is not None:
+        if not is_valid_email(clean_email):
+            return JSONResponse(status_code=400, content={"error": "Ingresa un correo electrónico válido para invitar."})
+        existing_user = get_user_by_email_raw(clean_email)
+        if existing_user:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "Ese correo ya tiene una cuenta en Zumbido 05. Agrégalo directamente como contacto.",
+                    "code": "ALREADY_REGISTERED",
+                },
+            )
+
+    inv = create_or_get_invitation(
+        inviter_id=user["id"],
+        invited_email=clean_email,
+        regenerate=bool(payload.regenerate),
+    )
+    return JSONResponse(
+        status_code=201,
+        content={
+            "invitation": inv,
+            "invitations": list_user_invitations(user["id"]),
+        },
+    )
+
+
+@fastapi_app.get("/api/invitations/{code}")
+async def inspect_invitation_endpoint(code: str, request: Request):
+    if not api_limiter.allow(client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "Demasiadas consultas. Intenta en unos segundos."})
+    info = get_invitation_by_code(code)
+    if not info:
+        return JSONResponse(status_code=404, content={"error": "Este enlace de invitación no existe o fue revocado."})
+    return {"valid": True, **info}
+
+
+@fastapi_app.post("/api/invitations/{code}/accept")
+async def accept_invitation_endpoint(
+    code: str,
+    request: Request,
+    user: Optional[dict] = Depends(require_user),
+):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    if not api_limiter.allow(client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "Límite temporal de peticiones alcanzado."})
+
+    redeemed = redeem_invitation(code, user["id"])
+    if not redeemed:
+        return JSONResponse(status_code=404, content={"error": "Este enlace de invitación no existe o fue revocado."})
+    if redeemed.get("selfInvite"):
+        return JSONResponse(status_code=400, content={"error": "Ese es tu propio enlace de invitación."})
+
+    inviter = redeemed["inviter"]
+    inviter_id = inviter["id"]
+    if not redeemed.get("alreadyFriends"):
+        inviter_bundle = get_friends_bundle(inviter_id, get_online_user_ids())
+        await emit_to_user(
+            inviter_id,
+            "invite_joined",
+            {"user": user, "bundle": inviter_bundle},
+        )
+        await notify_friends_presence(user["id"])
+        await notify_friends_presence(inviter_id)
+
+    my_bundle = get_friends_bundle(user["id"], get_online_user_ids())
+    return {
+        "ok": True,
+        "inviter": inviter,
+        "alreadyFriends": bool(redeemed.get("alreadyFriends")),
+        **my_bundle,
+    }
+
+
+@fastapi_app.delete("/api/invitations/{code}")
+async def delete_invitation_endpoint(code: str, user: Optional[dict] = Depends(require_user)):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    removed = delete_invitation(user["id"], code)
+    if not removed:
+        return JSONResponse(status_code=404, content={"error": "Invitación no encontrada."})
+    return {"ok": True, "invitations": list_user_invitations(user["id"])}
+
+
 # --- MESSAGES ---
 
 @fastapi_app.get("/api/messages/{friend_id}")
@@ -483,9 +675,97 @@ async def read_messages(friend_id: int, user: Optional[dict] = Depends(require_u
     return {"ok": True, "updatedCount": updated_count}
 
 
+# --- WEB PUSH NOTIFICATIONS ---
+
+@fastapi_app.get("/api/push/public-key")
+async def push_public_key():
+    pub = get_vapid_public_key()
+    return {
+        "enabled": bool(pub),
+        "publicKey": pub,
+    }
+
+
+@fastapi_app.post("/api/push/subscribe")
+async def push_subscribe(
+    payload: PushSubscribePayload,
+    request: Request,
+    user: Optional[dict] = Depends(require_user),
+):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    if not payload.endpoint or not payload.endpoint.startswith("https://"):
+        return JSONResponse(status_code=400, content={"error": "Endpoint de notificación inválido."})
+    if not payload.keys.p256dh or not payload.keys.auth:
+        return JSONResponse(status_code=400, content={"error": "Claves de suscripción incompletas."})
+
+    ua = request.headers.get("user-agent", "")[:255]
+    save_push_subscription(
+        user_id=user["id"],
+        endpoint=payload.endpoint,
+        p256dh=payload.keys.p256dh,
+        auth=payload.keys.auth,
+        user_agent=ua,
+    )
+    subs = get_user_push_subscriptions(user["id"])
+    return JSONResponse(status_code=201, content={"ok": True, "devices": len(subs)})
+
+
+@fastapi_app.delete("/api/push/subscribe")
+async def push_unsubscribe(
+    payload: PushUnsubscribePayload,
+    user: Optional[dict] = Depends(require_user),
+):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    removed = delete_push_subscription(user["id"], payload.endpoint)
+    return {"ok": True, "removed": removed}
+
+
+@fastapi_app.post("/api/push/test")
+async def push_test(
+    request: Request,
+    user: Optional[dict] = Depends(require_user),
+):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    if not api_limiter.allow(client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "Espera unos segundos antes de probar nuevamente."})
+
+    res = await send_push_to_user(
+        user["id"],
+        title="🔔 Zumbido 05 — Notificaciones activas",
+        body="¡Perfecto! Recibirás mensajes y zumbidos aunque apagues la pantalla.",
+        url="/",
+        tag="z05-test-push",
+        vibrate=[180, 80, 180],
+        data={"kind": "test"},
+        force=True,
+    )
+    if res["total"] == 0:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Este dispositivo aún no está suscrito a notificaciones Push."},
+        )
+    return {"ok": True, **res}
+
+
 # ========================
 # SOCKET.IO REAL-TIME EVENTS
 # ========================
+
+async def _delayed_mark_offline(uid: int):
+    try:
+        if OFFLINE_GRACE_SECONDS > 0:
+            await asyncio.sleep(OFFLINE_GRACE_SECONDS)
+        # Only mark offline if user still has zero active sockets
+        if len(user_sockets.get(uid, set())) == 0:
+            pending_offline_tasks.pop(uid, None)
+            touch_user_last_seen(uid)
+            await notify_friends_presence(uid)
+    except asyncio.CancelledError:
+        return
+
 
 @sio.event
 async def connect(sid, environ, auth):
@@ -502,7 +782,12 @@ async def connect(sid, environ, auth):
         raise socketio.exceptions.ConnectionRefusedError("USER_NOT_FOUND")
 
     uid = user["id"]
-    was_offline = uid not in user_sockets or len(user_sockets[uid]) == 0
+    pending_task = pending_offline_tasks.pop(uid, None)
+    was_in_grace = pending_task is not None
+    if pending_task and not pending_task.done():
+        pending_task.cancel()
+
+    was_offline = (uid not in user_sockets or len(user_sockets[uid]) == 0) and not was_in_grace
     user_sockets.setdefault(uid, set()).add(sid)
 
     await sio.save_session(sid, {"user_id": uid})
@@ -546,7 +831,13 @@ async def disconnect(sid):
         if len(sids) == 0:
             user_sockets.pop(uid, None)
             touch_user_last_seen(uid)
-            await notify_friends_presence(uid)
+            if OFFLINE_GRACE_SECONDS > 0:
+                existing = pending_offline_tasks.pop(uid, None)
+                if existing and not existing.done():
+                    existing.cancel()
+                pending_offline_tasks[uid] = asyncio.create_task(_delayed_mark_offline(uid))
+            else:
+                await notify_friends_presence(uid)
 
 
 @sio.event
@@ -594,6 +885,25 @@ async def send_message(sid, payload):
 
     await emit_to_user(user_id, "receive_message", wire)
     await emit_to_user(to_user_id, "receive_message", wire)
+
+    sender_name = strip_plus_tags(sender["nickname"]) if sender else "Contacto"
+    preview_body = (
+        "📷 Te envió una foto"
+        if msg_type == "image"
+        else "🎙️ Te envió un clip de voz"
+        if msg_type == "voice"
+        else "✍️ Te envió una nota manuscrita"
+        if msg_type == "ink"
+        else text.strip()[:120]
+    )
+    schedule_push_to_user(
+        to_user_id,
+        title=f"💬 {sender_name}",
+        body=preview_body,
+        url=f"/?chat={user_id}",
+        tag=f"z05-chat-{user_id}",
+        data={"kind": "message", "friendId": user_id},
+    )
     return {"ok": True, "message": wire}
 
 
@@ -637,6 +947,17 @@ async def send_nudge(sid, payload):
 
     await emit_to_user(user_id, "receive_nudge", wire)
     await emit_to_user(to_user_id, "receive_nudge", wire)
+
+    sender_name = strip_plus_tags(sender["nickname"]) if sender else "Contacto"
+    schedule_push_to_user(
+        to_user_id,
+        title=f"⚡ ¡Zumbido de {sender_name}!",
+        body="¡Te acaba de enviar un zumbido en Zumbido 05!",
+        url=f"/?chat={user_id}",
+        tag=f"z05-nudge-{user_id}",
+        vibrate=[220, 90, 220, 90, 320],
+        data={"kind": "nudge", "friendId": user_id},
+    )
     return {"ok": True, "message": wire}
 
 
@@ -672,6 +993,16 @@ async def send_wink(sid, payload):
 
     await emit_to_user(user_id, "receive_wink", wire)
     await emit_to_user(to_user_id, "receive_wink", wire)
+
+    sender_name = strip_plus_tags(sender["nickname"]) if sender else "Contacto"
+    schedule_push_to_user(
+        to_user_id,
+        title=f"✨ {sender_name}",
+        body="Te envió un guiño animado en Zumbido 05.",
+        url=f"/?chat={user_id}",
+        tag=f"z05-chat-{user_id}",
+        data={"kind": "wink", "friendId": user_id},
+    )
     return {"ok": True, "message": wire}
 
 

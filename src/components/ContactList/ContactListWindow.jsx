@@ -14,6 +14,7 @@ export default function ContactListWindow({
   incomingRequests = [],
   onOpenChat,
   onOpenAddFriend,
+  onOpenInvite,
   onOpenProfileModal,
   onOpenAbout,
   onMoveFriendGroup,
@@ -23,6 +24,10 @@ export default function ContactListWindow({
   canInstallPwa,
   notificationPermission,
   onRequestNotifications,
+  pushStatus = { supported: false, permission: 'default', subscribed: false, needsIosInstall: false },
+  pushBusy = false,
+  pushMessage = '',
+  onTestPush,
   onLogout,
   onMinimize,
   isFocused,
@@ -199,7 +204,7 @@ export default function ContactListWindow({
 
   // Mobile Profile tab view
   const renderMobileProfileView = () => (
-    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto', flex: 1 }}>
+    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 11, overflowY: 'auto', flex: 1 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div className="z05-avatar-box" style={{ width: 64, height: 64 }} onClick={onOpenProfileModal}>
           <AvatarView avatar={profile.avatar} alt={stripPlusTags(profile.nickname)} />
@@ -216,20 +221,109 @@ export default function ContactListWindow({
         🖼️ Cambiar foto real, apodo y canción (8)
       </button>
 
+      {/* Background Push Notifications Card */}
+      <div className="z05-invite-box" style={{ gap: 7 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+          <strong style={{ fontSize: 12, color: '#0b3474' }}>🔔 Notificaciones con pantalla apagada</strong>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 'bold',
+              padding: '2px 7px',
+              borderRadius: 10,
+              background: pushStatus.subscribed ? '#dcfce7' : '#fef3c7',
+              color: pushStatus.subscribed ? '#166534' : '#92400e'
+            }}
+          >
+            {pushStatus.subscribed ? 'Activas ✓' : 'Inactivas'}
+          </span>
+        </div>
+
+        <div style={{ fontSize: 11, color: '#455a75', lineHeight: 1.4 }}>
+          Recibe mensajes, zumbidos y solicitudes en tu teléfono aunque bloquees la pantalla o cierres la app.
+        </div>
+
+        {pushStatus.needsIosInstall && (
+          <div className="z05-invite-callout" style={{ fontSize: 10 }}>
+            En iPhone/iPad: abre en Safari, toca <strong>Compartir → Añadir a pantalla de inicio</strong> y entra desde ese ícono para activar notificaciones Push.
+          </div>
+        )}
+
+        {pushMessage && (
+          <div
+            className={pushMessage.startsWith('⚠️') ? 'z05-alert-error' : 'z05-alert-success'}
+            style={{ fontSize: 11 }}
+          >
+            {pushMessage}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {!pushStatus.subscribed ? (
+            <button
+              type="button"
+              className="c05-btn c05-btn-primary"
+              style={{ flex: 1, padding: '8px 10px' }}
+              disabled={pushBusy}
+              onClick={onRequestNotifications}
+            >
+              {pushBusy ? 'Activando...' : '🔔 Activar notificaciones Push'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="c05-btn"
+              style={{ flex: 1, padding: '8px 10px' }}
+              disabled={pushBusy}
+              onClick={onTestPush}
+            >
+              {pushBusy ? 'Enviando...' : '🧪 Probar notificación en mi celular'}
+            </button>
+          )}
+        </div>
+      </div>
+
       {canInstallPwa && (
         <button type="button" className="c05-btn c05-btn-primary" style={{ padding: '10px 14px' }} onClick={onInstallPwa}>
           📲 Instalar Zumbido 05 en tu dispositivo
         </button>
       )}
 
-      {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
-        <button type="button" className="c05-btn" style={{ padding: '10px 14px' }} onClick={onRequestNotifications}>
-          🔔 Activar notificaciones de mensajes
-        </button>
-      )}
+      {/* Developer Card — islaDev (Mobile) */}
+      <div
+        style={{
+          background: 'linear-gradient(135deg, #0f172a 0%, #162640 100%)',
+          border: '1px solid #0891b2',
+          borderRadius: 6,
+          padding: 10,
+          color: '#e2e8f0',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10
+        }}
+      >
+        <img
+          src="/icons/isladev-icon.png"
+          alt="islaDev"
+          style={{ width: 42, height: 42, borderRadius: 8, border: '1px solid rgba(125,211,252,0.7)', flexShrink: 0 }}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 'bold', color: '#fff' }}>Desarrollado por islaDev</div>
+          <div style={{ fontSize: 10, color: '#cbd5e1' }}>Isla de Margarita, Venezuela 🌴</div>
+        </div>
+        <a
+          href="https://isladev.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="c05-btn c05-btn-primary"
+          style={{ textDecoration: 'none', fontSize: 11, padding: '5px 8px', whiteSpace: 'nowrap' }}
+        >
+          🌐 isladev.com
+        </a>
+      </div>
 
       <button type="button" className="c05-btn" style={{ padding: '10px 14px' }} onClick={onOpenAbout}>
-        ℹ️ Acerca de Zumbido 05
+        ℹ️ Desarrollador y Acerca de Zumbido 05
       </button>
 
       <button type="button" className="c05-btn c05-btn-danger" style={{ padding: '10px 14px' }} onClick={onLogout}>
@@ -381,12 +475,22 @@ export default function ContactListWindow({
 
               {/* Quick Actions Bar */}
               <div className="z05-quick-bar">
-                <button type="button" className="z05-quick-btn" onClick={onOpenAddFriend}>
-                  <span>➕ Agregar amigo</span>
-                  {incomingRequests.length > 0 && (
-                    <span className="z05-pill-badge">{incomingRequests.length}</span>
-                  )}
-                </button>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button type="button" className="z05-quick-btn" onClick={onOpenAddFriend}>
+                    <span>➕ Agregar</span>
+                    {incomingRequests.length > 0 && (
+                      <span className="z05-pill-badge">{incomingRequests.length}</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="z05-quick-btn"
+                    onClick={onOpenInvite}
+                    title="Invitar a personas que aún no tienen cuenta en Zumbido 05"
+                  >
+                    <span>✉️ Invitar</span>
+                  </button>
+                </div>
 
                 <div style={{ display: 'flex', gap: 4 }}>
                   <button
@@ -424,16 +528,24 @@ export default function ContactListWindow({
                     <div style={{ fontSize: 28, marginBottom: 6 }}>👥</div>
                     <strong>Aún no tienes contactos en tu lista.</strong>
                     <div style={{ fontSize: 11, marginTop: 4 }}>
-                      Agrega a un amigo usando su correo electrónico registrado en Zumbido 05.
+                      Agrega a un amigo por su correo o envíale un enlace mágico de invitación si aún no tiene cuenta.
                     </div>
-                    <button
-                      type="button"
-                      className="c05-btn c05-btn-primary"
-                      style={{ marginTop: 10 }}
-                      onClick={onOpenAddFriend}
-                    >
-                      ➕ Agregar primer amigo
-                    </button>
+                    <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+                      <button
+                        type="button"
+                        className="c05-btn c05-btn-primary"
+                        onClick={onOpenAddFriend}
+                      >
+                        ➕ Agregar amigo
+                      </button>
+                      <button
+                        type="button"
+                        className="c05-btn"
+                        onClick={onOpenInvite}
+                      >
+                        ✉️ Invitar amigos
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   groupedSections.map((sec) => {
@@ -454,16 +566,25 @@ export default function ContactListWindow({
               {/* Bottom Novedades 05 Bar */}
               <div className="z05-bottom-banner">
                 <span>
-                  <strong style={{ color: '#0055ea' }}>Novedades 05:</strong> Tinta, clips de voz (F2) y zumbidos activos.
+                  <strong style={{ color: '#0055ea' }}>Zumbido 05</strong> por{' '}
+                  <a
+                    href="https://isladev.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#0891b2', fontWeight: 'bold', textDecoration: 'none' }}
+                  >
+                    islaDev
+                  </a>
                 </span>
-                {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
+                {(!pushStatus.subscribed && (pushStatus.supported || notificationPermission !== 'granted')) && (
                   <button
                     type="button"
                     className="c05-btn"
                     style={{ fontSize: 10, padding: '1px 6px' }}
+                    disabled={pushBusy}
                     onClick={onRequestNotifications}
                   >
-                    🔔 Avisos
+                    {pushBusy ? '...' : '🔔 Avisos Push'}
                   </button>
                 )}
               </div>

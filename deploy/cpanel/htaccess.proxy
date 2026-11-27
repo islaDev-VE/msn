@@ -1,0 +1,22 @@
+Options -Indexes
+DirectoryIndex disabled
+RewriteEngine On
+
+# Permitir renovacion automatica de certificados SSL (cPanel AutoSSL)
+RewriteRule ^\.well-known/ - [L]
+
+# Forzar HTTPS
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Preservar cabeceras de proxy si mod_headers esta disponible
+<IfModule mod_headers.c>
+    RequestHeader set X-Forwarded-Proto "https"
+</IfModule>
+
+# Upgrade WebSocket para Socket.IO
+RewriteCond %{HTTP:Upgrade} =websocket [NC]
+RewriteRule ^(socket\.io/.*)$ ws://127.0.0.1:__APP_PORT__/$1 [P,L]
+
+# Proxy HTTP general hacia FastAPI + Socket.IO + PWA
+RewriteRule ^(.*)$ http://127.0.0.1:__APP_PORT__/$1 [P,L]

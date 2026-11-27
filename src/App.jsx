@@ -9,7 +9,14 @@ import AboutModal from './components/Modals/AboutModal';
 import ZumbidoLogo from './components/Common/ZumbidoLogo';
 
 import { api, getStoredToken, setStoredToken } from './services/api';
-import { connectSocket, disconnectSocket } from './services/socket';
+import { connectSocket, disconnectSocket, reconnectSocketNow } from './services/socket';
+import {
+  getPushStatus,
+  subscribeToWebPush,
+  syncExistingPushSubscription,
+  unsubscribeFromWebPush,
+  updateAppBadge
+} from './services/pushClient';
 import {
   playMessageSound,
   playNudgeSound,
@@ -18,11 +25,54 @@ import {
 } from './services/soundEngine';
 import { stripPlusTags } from './services/plusFormatter';
 
+function getInitialInviteCode() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const code = (params.get('invite') || '').trim();
+    return code || null;
+  } catch {
+    return null;
+  }
+}
+
+function getInitialChatFriendId() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('chat');
+    const num = raw ? Number(raw) : NaN;
+    return Number.isInteger(num) && num > 0 ? num : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearQueryParamFromUrl(paramName) {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has(paramName)) {
+      url.searchParams.delete(paramName);
+      const next = `${url.pathname}${url.search}${url.hash}`;
+      window.history.replaceState({}, '', next || '/');
+    }
+  } catch {
+    // ignore URL manipulation errors
+  }
+}
+
+function clearInviteFromUrl() {
+  clearQueryParamFromUrl('invite');
+}
+
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [token, setToken] = useState(() => getStoredToken());
   const [profile, setProfile] = useState(null);
   const [connectionState, setConnectionState] = useState('connected');
+  const [pendingInviteCode, setPendingInviteCode] = useState(() => getInitialInviteCode());
+  const [pendingChatFriendId, setPendingChatFriendId] = useState(() => getInitialChatFriendId());
 
   // Friends & requests
   const [friends, setFriends] = useState([]);
@@ -45,7 +95,7 @@ export default function App() {
   const zCounterRef = useRef(210);
 
   // Modals & notifications
-  const [isAddFriendOpen, setIsAddFriendOpen] = useState(false);
+  const [addFriendModalTab, setAddFriendModalTab] = useState(null); // null | 'add' | 'invite'
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [toasterData, setToasterData] = useState(null);
@@ -60,15 +110,27 @@ export default function App() {
   const [notificationPermission, setNotificationPermission] = useState(() =>
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
   );
+  const [pushStatus, setPushStatus] = useState({
+    supported: false,
+    permission: typeof Notification !== 'undefined' ? Notification.permission : 'unsupported',
+    subscribed: false,
+    needsIosInstall: false
+  });
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMessage, setPushMessage] = useState('');
 
   const socketRef = useRef(null);
   const activeWindowRef = useRef(activeWindowId);
   const minimizedRef = useRef(minimizedWindows);
   const profileRef = useRef(profile);
+  const openChatIdsRef = useRef(openChatIds);
+  const friendsRef = useRef(friends);
 
   useEffect(() => { activeWindowRef.current = activeWindowId; }, [activeWindowId]);
   useEffect(() => { minimizedRef.current = minimizedWindows; }, [minimizedWindows]);
   useEffect(() => { profileRef.current = profile; }, [profile]);
+  useEffect(() => { openChatIdsRef.current = openChatIds; }, [openChatIds]);
+  useEffect(() => { friendsRef.current = friends; }, [friends]);
 
   // Responsive matchMedia + visualViewport keyboard adaptation
   useEffect(() => {
@@ -329,6 +391,14 @@ export default function App() {
       showToaster(user, 'aceptó tu solicitud de contacto', user.id);
     });
 
+    s.on('invite_joined', ({ user, bundle }) => {
+      if (bundle) applyFriendsBundle(bundle);
+      playMessageSound();
+      if (user) {
+        showToaster(user, 'se unió a Zumbido 05 con tu invitación 🎉', user.id);
+      }
+    });
+
     s.on('receive_message', (msg) => {
       appendMessageToConversation(msg);
       if (msg.fromUserId !== profileRef.current?.id) {
@@ -379,15 +449,118 @@ export default function App() {
     };
   }, [token, profile?.id, applyFriendsBundle, markConversationAsRead, sendSystemNotification, showToaster]);
 
-  const handleAuthenticated = (newToken, user) => {
+  // If user is already logged in (or just logged in via login tab) with ?invite=<code>, accept automatically
+  useEffect(() => {
+    if (!token || !profile?.id || !pendingInviteCode) return;
+    const code = pendingInviteCode;
+    setPendingInviteCode(null);
+    clearInviteFromUrl();
+    api.acceptInvitation(code)
+      .then((res) => {
+        applyFriendsBundle(res);
+        if (res.inviter) {
+          showToaster(
+            res.inviter,
+            res.alreadyFriends
+              ? 'ya está en tu lista de contactos'
+              : 'ahora está en tu lista de contactos 🎉',
+            res.inviter.id
+          );
+        }
+      })
+      .catch(() => {
+        // Ignore expired/self/invalid invite codes silently after cleaning URL
+      });
+  }, [token, profile?.id, pendingInviteCode, applyFriendsBundle, showToaster]);
+
+  // Instant mobile reconnect & chat sync whenever screen wakes up or network returns
+  useEffect(() => {
+    if (!token || !profile?.id) return;
+
+    const handleResume = () => {
+      if (document.visibilityState === 'hidden') return;
+      reconnectSocketNow();
+      api.getFriends().then(applyFriendsBundle).catch(() => {});
+      openChatIdsRef.current.forEach((fid) => {
+        loadHistory(fid);
+      });
+    };
+
+    document.addEventListener('visibilitychange', handleResume);
+    window.addEventListener('pageshow', handleResume);
+    window.addEventListener('focus', handleResume);
+    window.addEventListener('online', handleResume);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleResume);
+      window.removeEventListener('pageshow', handleResume);
+      window.removeEventListener('focus', handleResume);
+      window.removeEventListener('online', handleResume);
+    };
+  }, [token, profile?.id, applyFriendsBundle, loadHistory]);
+
+  // Sync Web Push subscription status & silently refresh existing subscription on login
+  useEffect(() => {
+    if (!token || !profile?.id) return;
+    let cancelled = false;
+    (async () => {
+      await syncExistingPushSubscription();
+      const st = await getPushStatus();
+      if (!cancelled) {
+        setPushStatus(st);
+        setNotificationPermission(st.permission);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, profile?.id]);
+
+  // Listen for Service Worker notificationclick -> OPEN_CHAT messages
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onSwMessage = (event) => {
+      if (event.data?.type === 'OPEN_CHAT' && event.data.friendId) {
+        const fid = Number(event.data.friendId);
+        const found = friendsRef.current.find((f) => f.id === fid);
+        if (found) {
+          openChatWithFriend(found);
+        } else {
+          setPendingChatFriendId(fid);
+        }
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onSwMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onSwMessage);
+  }, [openChatWithFriend]);
+
+  // Open pending chat from ?chat=<friendId> or push click once friends list loads
+  useEffect(() => {
+    if (!pendingChatFriendId || friends.length === 0) return;
+    const target = friends.find((f) => f.id === pendingChatFriendId);
+    if (target) {
+      setPendingChatFriendId(null);
+      clearQueryParamFromUrl('chat');
+      openChatWithFriend(target);
+    }
+  }, [pendingChatFriendId, friends, openChatWithFriend]);
+
+  const handleAuthenticated = (newToken, user, invitedBy = null) => {
     setStoredToken(newToken);
     setToken(newToken);
     setProfile(user);
     setActiveWindowId('contactList');
+    if (invitedBy) {
+      setPendingInviteCode(null);
+      clearInviteFromUrl();
+      showToaster(invitedBy, 'ya está en tu lista de contactos por invitación 🎉', invitedBy.id);
+    }
     api.getFriends().then(applyFriendsBundle).catch(() => {});
   };
 
   const handleLogout = () => {
+    unsubscribeFromWebPush();
+    updateAppBadge(0);
     playLogoutSound();
     disconnectSocket();
     setStoredToken(null);
@@ -399,6 +572,7 @@ export default function App() {
     setOpenChatIds([]);
     setChatHistories({});
     setFlashingWindows({});
+    setPushMessage('');
   };
 
   const handleUpdateProfile = async (updates) => {
@@ -466,13 +640,45 @@ export default function App() {
   };
 
   const handleRequestNotifications = async () => {
-    if (typeof Notification === 'undefined') return;
-    const perm = await Notification.requestPermission();
-    setNotificationPermission(perm);
+    setPushBusy(true);
+    setPushMessage('');
+    try {
+      await subscribeToWebPush();
+      const st = await getPushStatus();
+      setPushStatus(st);
+      setNotificationPermission(st.permission);
+      setPushMessage('✓ ¡Notificaciones Push activadas! Ya puedes bloquear la pantalla y recibirás alertas.');
+    } catch (err) {
+      const st = await getPushStatus();
+      setPushStatus(st);
+      setNotificationPermission(st.permission);
+      setPushMessage(`⚠️ ${err.message || 'No se pudieron activar las notificaciones Push.'}`);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleTestPush = async () => {
+    setPushBusy(true);
+    setPushMessage('');
+    try {
+      await api.sendTestPush();
+      setPushMessage('✓ Notificación de prueba enviada a tu dispositivo.');
+    } catch (err) {
+      setPushMessage(`⚠️ ${err.message || 'No se pudo enviar la notificación de prueba.'}`);
+    } finally {
+      setPushBusy(false);
+    }
   };
 
   const isLoggedIn = Boolean(profile);
   const totalUnreadCount = friends.reduce((sum, f) => sum + (f.unreadCount || 0), 0);
+
+  // Sync PWA App Icon Badge with unread messages + pending requests
+  useEffect(() => {
+    updateAppBadge(isLoggedIn ? totalUnreadCount + incomingRequests.length : 0);
+  }, [isLoggedIn, totalUnreadCount, incomingRequests.length]);
+
   const openFriends = openChatIds
     .map((fid) => friends.find((f) => f.id === fid))
     .filter(Boolean);
@@ -558,7 +764,7 @@ export default function App() {
           const target = friends.find((f) => f.id === toasterData.friendId);
           if (target) openChatWithFriend(target);
         } else if (incomingRequests.length > 0) {
-          setIsAddFriendOpen(true);
+          setAddFriendModalTab('add');
         }
         setToasterData(null);
       }}
@@ -575,6 +781,7 @@ export default function App() {
           onAuthenticated={handleAuthenticated}
           onOpenAbout={() => setIsAboutOpen(true)}
           isMobile={isMobile}
+          inviteCode={pendingInviteCode}
         />
       )}
 
@@ -586,7 +793,8 @@ export default function App() {
           friends={friends}
           incomingRequests={incomingRequests}
           onOpenChat={openChatWithFriend}
-          onOpenAddFriend={() => setIsAddFriendOpen(true)}
+          onOpenAddFriend={() => setAddFriendModalTab('add')}
+          onOpenInvite={() => setAddFriendModalTab('invite')}
           onOpenProfileModal={() => setIsProfileModalOpen(true)}
           onOpenAbout={() => setIsAboutOpen(true)}
           onMoveFriendGroup={handleMoveFriendGroup}
@@ -596,6 +804,10 @@ export default function App() {
           canInstallPwa={Boolean(deferredInstallPrompt)}
           notificationPermission={notificationPermission}
           onRequestNotifications={handleRequestNotifications}
+          pushStatus={pushStatus}
+          pushBusy={pushBusy}
+          pushMessage={pushMessage}
+          onTestPush={handleTestPush}
           onLogout={handleLogout}
           onMinimize={() => handleMinimize('contactList')}
           isFocused={activeWindowId === 'contactList'}
@@ -646,14 +858,16 @@ export default function App() {
           );
         })}
 
-      {/* 4. Add Friend & Requests Modal */}
-      {isAddFriendOpen && (
+      {/* 4. Add Friend, Requests & Invitations Modal */}
+      {addFriendModalTab && (
         <AddFriendModal
           incomingRequests={incomingRequests}
           outgoingRequests={outgoingRequests}
+          initialTab={addFriendModalTab}
+          myNickname={profile?.nickname || ''}
           onSendRequest={handleSendFriendRequest}
           onRespondRequest={handleRespondFriendRequest}
-          onClose={() => setIsAddFriendOpen(false)}
+          onClose={() => setAddFriendModalTab(null)}
         />
       )}
 

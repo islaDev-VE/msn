@@ -58,6 +58,7 @@ const serverProc = spawn(
       ...process.env,
       PORT: String(TEST_PORT),
       DATABASE_URL: `sqlite:///${dbPath}`,
+      VAPID_KEYS_FILE: path.join(tmpDir, 'vapid.json'),
       JWT_SECRET: 'super-secret-python-integration-test-key-2026'
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -253,6 +254,98 @@ try {
   });
   assert.ok(blockedMsg.error);
   console.log('✓ 7. Contact blocking enforcement OK');
+
+  // 8. Magic Invitation Links (unregistered user -> auto-friend + real-time notification + revoke)
+  const notFoundReq = await apiReq('/api/friends/request', {
+    method: 'POST',
+    token: anaToken,
+    body: { email: 'carla.nueva@retro.com' }
+  });
+  assert.equal(notFoundReq.status, 404);
+  assert.equal(notFoundReq.data.code, 'USER_NOT_FOUND');
+
+  const invList = await apiReq('/api/invitations', { token: anaToken });
+  assert.equal(invList.status, 200);
+  assert.ok(invList.data.personal?.code);
+
+  const emailInvRes = await apiReq('/api/invitations', {
+    method: 'POST',
+    token: anaToken,
+    body: { email: 'carla.nueva@retro.com' }
+  });
+  assert.equal(emailInvRes.status, 201);
+  const invCode = emailInvRes.data.invitation.code;
+  assert.equal(emailInvRes.data.invitation.invitedEmail, 'carla.nueva@retro.com');
+
+  const publicInv = await apiReq(`/api/invitations/${invCode}`);
+  assert.equal(publicInv.status, 200);
+  assert.equal(publicInv.data.valid, true);
+  assert.equal(publicInv.data.inviter.id, anaId);
+  assert.equal(publicInv.data.inviter.email, undefined); // never expose inviter email publicly
+
+  let anaGotInviteJoined = null;
+  anaSocket.on('invite_joined', (payload) => { anaGotInviteJoined = payload; });
+
+  const regCarla = await apiReq('/api/auth/register', {
+    method: 'POST',
+    body: {
+      email: 'carla.nueva@retro.com',
+      password: 'password123',
+      nickname: 'Carla 2005',
+      inviteCode: invCode
+    }
+  });
+  assert.equal(regCarla.status, 201);
+  assert.equal(regCarla.data.invitedBy.id, anaId);
+
+  await new Promise((r) => setTimeout(r, 150));
+  assert.ok(anaGotInviteJoined);
+  assert.equal(anaGotInviteJoined.user.email, 'carla.nueva@retro.com');
+
+  const carlaFriends = await apiReq('/api/friends', { token: regCarla.data.token });
+  assert.equal(carlaFriends.data.friends.length, 1);
+  assert.equal(carlaFriends.data.friends[0].id, anaId);
+
+  const invAfter = await apiReq('/api/invitations', { token: anaToken });
+  const usedInv = invAfter.data.invitations.find((i) => i.code === invCode);
+  assert.equal(usedInv.usesCount, 1);
+
+  const delInv = await apiReq(`/api/invitations/${invCode}`, { method: 'DELETE', token: anaToken });
+  assert.equal(delInv.status, 200);
+  const revokedLookup = await apiReq(`/api/invitations/${invCode}`);
+  assert.equal(revokedLookup.status, 404);
+  console.log('✓ 8. Magic invitation links, auto-friendship, real-time notification & revocation OK');
+
+  // 9. islaDev branding assets & Web Push (VAPID) subscription endpoints
+  for (const asset of ['/icons/isladev-icon.png', '/icons/isladev-logo.png']) {
+    const r = await fetch(`${BASE_URL}${asset}`);
+    assert.equal(r.status, 200, `Expected 200 for ${asset}`);
+  }
+  const vapidRes = await apiReq('/api/push/public-key');
+  assert.equal(vapidRes.status, 200);
+  assert.equal(vapidRes.data.enabled, true);
+  assert.ok(typeof vapidRes.data.publicKey === 'string' && vapidRes.data.publicKey.length >= 60);
+
+  const testEndpoint = 'https://fcm.googleapis.com/fcm/send/fake-test-endpoint-zumbido05';
+  const subRes = await apiReq('/api/push/subscribe', {
+    method: 'POST',
+    token: anaToken,
+    body: {
+      endpoint: testEndpoint,
+      keys: { p256dh: 'test-p256dh-key', auth: 'test-auth-secret' }
+    }
+  });
+  assert.equal(subRes.status, 201);
+  assert.equal(subRes.data.devices, 1);
+
+  const unsubRes = await apiReq('/api/push/subscribe', {
+    method: 'DELETE',
+    token: anaToken,
+    body: { endpoint: testEndpoint }
+  });
+  assert.equal(unsubRes.status, 200);
+  assert.equal(unsubRes.data.removed, true);
+  console.log('✓ 9. islaDev assets & Web Push VAPID subscribe/unsubscribe OK');
 
   anaSocket.disconnect();
   luisSocket.disconnect();

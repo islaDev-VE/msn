@@ -7,7 +7,7 @@ export function connectSocket(token, onConnectionStateChange) {
 
   socket = io(window.location.origin, {
     auth: { token },
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1200,
@@ -43,6 +43,13 @@ export function connectSocket(token, onConnectionStateChange) {
 
 export function getSocket() {
   return socket;
+}
+
+export function reconnectSocketNow() {
+  if (!socket) return;
+  if (!socket.connected) {
+    socket.connect();
+  }
 }
 
 export function disconnectSocket() {

@@ -75,14 +75,26 @@ export default function Desktop({
           <div className="c05-shortcut-label">Zumbido 05</div>
         </div>
 
-        <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenAbout?.()}>
+        <a
+          href="https://isladev.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="c05-desktop-shortcut"
+          title="Visitar isladev.com — Desarrollado por islaDev"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="c05-shortcut-icon">
+            <div className="c05-shortcut-isladev">
+              <img src="/icons/isladev-icon.png" alt="islaDev" />
+              <span className="c05-shortcut-arrow" aria-hidden="true">↗</span>
+            </div>
+          </div>
+          <div className="c05-shortcut-label">islaDev.com</div>
+        </a>
+
+        <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenAbout?.()} title="Información del desarrollador y Acerca de">
           <div className="c05-shortcut-icon">💻</div>
           <div className="c05-shortcut-label">Mi Equipo</div>
-        </div>
-
-        <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenAbout?.()}>
-          <div className="c05-shortcut-icon">🌐</div>
-          <div className="c05-shortcut-label">Navegador Web</div>
         </div>
 
         <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenAbout?.()}>
@@ -201,13 +213,23 @@ export default function Desktop({
                   <div style={{ fontSize: 10, color: '#666' }}>Mensajería retro</div>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', color: '#444' }}>
-                <span style={{ fontSize: 20 }}>🌐</span>
+              <a
+                href="https://isladev.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setShowClassicMenu(false)}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', color: '#0b3474', textDecoration: 'none', borderRadius: 3 }}
+              >
+                <img
+                  src="/icons/isladev-icon.png"
+                  alt="islaDev"
+                  style={{ width: 24, height: 24, borderRadius: 4, border: '1px solid #7dd3fc' }}
+                />
                 <div>
-                  <strong style={{ fontSize: 11 }}>Navegador Web</strong>
-                  <div style={{ fontSize: 10, color: '#777' }}>Acceso rápido</div>
+                  <strong style={{ fontSize: 11, color: '#000' }}>islaDev.com</strong>
+                  <div style={{ fontSize: 10, color: '#666' }}>Desarrollo web & apps</div>
                 </div>
-              </div>
+              </a>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', color: '#444' }}>
                 <span style={{ fontSize: 20 }}>🎵</span>
                 <div>
@@ -229,7 +251,7 @@ export default function Desktop({
                   onOpenAbout?.();
                 }}
               >
-                ℹ️ Acerca de Zumbido 05
+                ℹ️ Desarrollador & Acerca de
               </div>
             </div>
           </div>

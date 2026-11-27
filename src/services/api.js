@@ -38,6 +38,7 @@ async function request(path, options = {}) {
     const detailMsg = typeof data.detail === 'string' ? data.detail : null;
     const err = new Error(data.error || detailMsg || `Error ${res.status}`);
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -110,6 +111,52 @@ export const api = {
   },
   markRead(friendId) {
     return request(`/api/messages/${friendId}/read`, {
+      method: 'POST'
+    });
+  },
+
+  // Invitations
+  getInvitations() {
+    return request('/api/invitations');
+  },
+  createInvitation(payload = {}) {
+    return request('/api/invitations', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+  getInvitation(code) {
+    return request(`/api/invitations/${encodeURIComponent(code)}`);
+  },
+  acceptInvitation(code) {
+    return request(`/api/invitations/${encodeURIComponent(code)}/accept`, {
+      method: 'POST'
+    });
+  },
+  deleteInvitation(code) {
+    return request(`/api/invitations/${encodeURIComponent(code)}`, {
+      method: 'DELETE'
+    });
+  },
+
+  // Web Push Notifications
+  getPushPublicKey() {
+    return request('/api/push/public-key');
+  },
+  subscribePush(subscriptionJson) {
+    return request('/api/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify(subscriptionJson)
+    });
+  },
+  unsubscribePush(endpoint) {
+    return request('/api/push/subscribe', {
+      method: 'DELETE',
+      body: JSON.stringify({ endpoint })
+    });
+  },
+  sendTestPush() {
+    return request('/api/push/test', {
       method: 'POST'
     });
   }

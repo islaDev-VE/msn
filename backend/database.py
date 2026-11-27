@@ -1,4 +1,5 @@
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Optional
@@ -81,6 +82,30 @@ class Message(Base):
     media_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
+
+
+class Invitation(Base):
+    __tablename__ = "invitations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    inviter_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    invited_email: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, default=None)
+    uses_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
+
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    p256dh: Mapped[str] = mapped_column(String(255), nullable=False)
+    auth: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_agent: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
 
 
 def _build_engine(db_url: str):
@@ -527,3 +552,275 @@ def mark_conversation_read(user_id: int, friend_id: int) -> int:
         )
         db.commit()
         return int(updated)
+
+
+# --- INVITATION QUERIES ---
+
+def _generate_invite_code() -> str:
+    return secrets.token_urlsafe(9)
+
+
+def format_invitation(inv: Optional[Invitation]) -> Optional[dict]:
+    if not inv:
+        return None
+    return {
+        "id": inv.id,
+        "code": inv.code,
+        "inviterId": inv.inviter_id,
+        "invitedEmail": inv.invited_email,
+        "usesCount": int(inv.uses_count or 0),
+        "createdAt": inv.created_at,
+    }
+
+
+def create_accepted_friendship(user_a_id: int, user_b_id: int) -> dict:
+    a, b = int(user_a_id), int(user_b_id)
+    if a == b:
+        return {"created": False, "already_friends": False}
+
+    with get_session() as db:
+        existing = (
+            db.query(Friendship)
+            .filter(
+                or_(
+                    and_(Friendship.user_id == a, Friendship.friend_id == b),
+                    and_(Friendship.user_id == b, Friendship.friend_id == a),
+                )
+            )
+            .all()
+        )
+        if existing:
+            already_accepted = all(row.status == "accepted" for row in existing)
+            if already_accepted:
+                return {"created": False, "already_friends": True}
+            for row in existing:
+                row.status = "accepted"
+            db.commit()
+            return {"created": True, "already_friends": False}
+
+        ts = now_ms()
+        r1 = Friendship(
+            user_id=a,
+            friend_id=b,
+            status="accepted",
+            requester_id=a,
+            group_name="Amigos",
+            is_blocked=False,
+            created_at=ts,
+        )
+        r2 = Friendship(
+            user_id=b,
+            friend_id=a,
+            status="accepted",
+            requester_id=a,
+            group_name="Amigos",
+            is_blocked=False,
+            created_at=ts,
+        )
+        db.add_all([r1, r2])
+        db.commit()
+        return {"created": True, "already_friends": False}
+
+
+def create_or_get_invitation(
+    inviter_id: int,
+    invited_email: Optional[str] = None,
+    regenerate: bool = False,
+) -> dict:
+    uid = int(inviter_id)
+    clean_email = invited_email.strip().lower()[:120] if invited_email and invited_email.strip() else None
+
+    with get_session() as db:
+        q = db.query(Invitation).filter(Invitation.inviter_id == uid)
+        if clean_email is None:
+            q = q.filter(Invitation.invited_email.is_(None))
+        else:
+            q = q.filter(Invitation.invited_email == clean_email)
+
+        existing = q.order_by(Invitation.id.desc()).first()
+        if existing and not regenerate:
+            return format_invitation(existing)
+        if existing and regenerate:
+            existing.code = _generate_invite_code()
+            existing.created_at = now_ms()
+            db.commit()
+            db.refresh(existing)
+            return format_invitation(existing)
+
+        inv = Invitation(
+            code=_generate_invite_code(),
+            inviter_id=uid,
+            invited_email=clean_email,
+            uses_count=0,
+            created_at=now_ms(),
+        )
+        db.add(inv)
+        db.commit()
+        db.refresh(inv)
+        return format_invitation(inv)
+
+
+def get_invitation_by_code(code: str) -> Optional[dict]:
+    clean_code = (code or "").strip()[:32]
+    if not clean_code:
+        return None
+    with get_session() as db:
+        inv = db.query(Invitation).filter(Invitation.code == clean_code).first()
+        if not inv:
+            return None
+        inviter = db.get(User, inv.inviter_id)
+        if not inviter:
+            return None
+        return {
+            "code": inv.code,
+            "invitedEmail": inv.invited_email,
+            "usesCount": int(inv.uses_count or 0),
+            "createdAt": inv.created_at,
+            "inviter": {
+                "id": inviter.id,
+                "nickname": inviter.nickname,
+                "personalMessage": inviter.personal_message or "",
+                "avatar": inviter.avatar or "bubbles",
+            },
+        }
+
+
+def list_user_invitations(inviter_id: int) -> list[dict]:
+    with get_session() as db:
+        rows = (
+            db.query(Invitation)
+            .filter(Invitation.inviter_id == int(inviter_id))
+            .order_by(Invitation.invited_email.isnot(None), Invitation.created_at.desc())
+            .all()
+        )
+        return [format_invitation(r) for r in rows]
+
+
+def delete_invitation(inviter_id: int, code: str) -> bool:
+    clean_code = (code or "").strip()[:32]
+    if not clean_code:
+        return False
+    with get_session() as db:
+        deleted = (
+            db.query(Invitation)
+            .filter(Invitation.inviter_id == int(inviter_id), Invitation.code == clean_code)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return deleted > 0
+
+
+def redeem_invitation(code: str, new_user_id: int) -> Optional[dict]:
+    clean_code = (code or "").strip()[:32]
+    if not clean_code:
+        return None
+    with get_session() as db:
+        inv = db.query(Invitation).filter(Invitation.code == clean_code).first()
+        if not inv:
+            return None
+        if inv.inviter_id == int(new_user_id):
+            return {"selfInvite": True, "code": inv.code}
+        inviter = db.get(User, inv.inviter_id)
+        if not inviter:
+            return None
+        inviter_dict = sanitize_user(inviter)
+        inviter_id = inv.inviter_id
+        inv.uses_count = int(inv.uses_count or 0) + 1
+        db.commit()
+
+    rel = create_accepted_friendship(inviter_id, int(new_user_id))
+    return {
+        "selfInvite": False,
+        "code": clean_code,
+        "inviter": inviter_dict,
+        "alreadyFriends": rel["already_friends"],
+    }
+
+
+# --- WEB PUSH SUBSCRIPTION QUERIES ---
+
+def save_push_subscription(
+    user_id: int,
+    endpoint: str,
+    p256dh: str,
+    auth: str,
+    user_agent: str = "",
+) -> dict:
+    uid = int(user_id)
+    clean_ep = (endpoint or "").strip()
+    clean_p256dh = (p256dh or "").strip()[:255]
+    clean_auth = (auth or "").strip()[:255]
+    clean_ua = (user_agent or "").strip()[:255]
+    ts = now_ms()
+
+    with get_session() as db:
+        existing = db.query(PushSubscription).filter(PushSubscription.endpoint == clean_ep).first()
+        if existing:
+            existing.user_id = uid
+            existing.p256dh = clean_p256dh
+            existing.auth = clean_auth
+            existing.user_agent = clean_ua
+            existing.updated_at = ts
+            db.commit()
+            return {"id": existing.id, "endpoint": existing.endpoint}
+
+        sub = PushSubscription(
+            user_id=uid,
+            endpoint=clean_ep,
+            p256dh=clean_p256dh,
+            auth=clean_auth,
+            user_agent=clean_ua,
+            created_at=ts,
+            updated_at=ts,
+        )
+        db.add(sub)
+        db.commit()
+        db.refresh(sub)
+        return {"id": sub.id, "endpoint": sub.endpoint}
+
+
+def get_user_push_subscriptions(user_id: int) -> list[dict]:
+    with get_session() as db:
+        rows = (
+            db.query(PushSubscription)
+            .filter(PushSubscription.user_id == int(user_id))
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "endpoint": r.endpoint,
+                "keys": {"p256dh": r.p256dh, "auth": r.auth},
+            }
+            for r in rows
+        ]
+
+
+def delete_push_subscription(user_id: int, endpoint: str) -> bool:
+    clean_ep = (endpoint or "").strip()
+    if not clean_ep:
+        return False
+    with get_session() as db:
+        deleted = (
+            db.query(PushSubscription)
+            .filter(PushSubscription.user_id == int(user_id), PushSubscription.endpoint == clean_ep)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return deleted > 0
+
+
+def delete_push_subscription_by_endpoint(endpoint: str) -> bool:
+    clean_ep = (endpoint or "").strip()
+    if not clean_ep:
+        return False
+    with get_session() as db:
+        deleted = (
+            db.query(PushSubscription)
+            .filter(PushSubscription.endpoint == clean_ep)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return deleted > 0
+
+
