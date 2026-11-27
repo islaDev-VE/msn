@@ -381,6 +381,67 @@ try {
   assert.equal(signOut, 'SIGN_OK');
   console.log('✓ 9. islaDev assets & Web Push VAPID subscribe/unsubscribe/sign OK');
 
+  // 10. Security hardening & regression tests
+  const homeRes = await fetch(`${BASE_URL}/`);
+  assert.ok((homeRes.headers.get('content-security-policy') || '').includes("default-src 'self'"));
+
+  for (const badEndpoint of [
+    'https://127.0.0.1/secret',
+    'https://evil.example.com/push',
+    'https://fcm.googleapis.com:8443/fcm/send/badport',
+    'https://user:pass@fcm.googleapis.com/fcm/send/creds'
+  ]) {
+    const ssrfRes = await apiReq('/api/push/subscribe', {
+      method: 'POST',
+      token: anaToken,
+      body: { endpoint: badEndpoint, keys: { p256dh: 'k', auth: 'a' } }
+    });
+    assert.equal(ssrfRes.status, 400, `Expected 400 SSRF block for ${badEndpoint}`);
+  }
+
+  const badNickReg = await apiReq('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'invisible@retro.com', password: 'password123', nickname: '[b][c=#ff0000][/c][/b]' }
+  });
+  assert.equal(badNickReg.status, 400);
+
+  const badNickProf = await apiReq('/api/auth/profile', {
+    method: 'PUT',
+    token: anaToken,
+    body: { nickname: '[i][/i]' }
+  });
+  assert.equal(badNickProf.status, 400);
+
+  // Blocked user (Luis blocked Ana in test #7) cannot bypass block using Ana's personal invite link
+  const anaPersonalCode = invList.data.personal.code;
+  const blockedInviteAccept = await apiReq(`/api/invitations/${anaPersonalCode}/accept`, {
+    method: 'POST',
+    token: luisToken
+  });
+  assert.equal(blockedInviteAccept.status, 403);
+
+  // Unblock Luis -> Ana to verify empty image media rejection & reject-accepted protection
+  await apiReq(`/api/friends/${anaId}/block`, {
+    method: 'PUT',
+    token: luisToken,
+    body: { blocked: false }
+  });
+  const emptyImgAck = await emitAck(anaSocket, 'send_message', {
+    toUserId: luisId,
+    type: 'image',
+    text: 'empty.png',
+    mediaData: ''
+  });
+  assert.ok(emptyImgAck.error);
+
+  const rejectAccepted = await apiReq('/api/friends/respond', {
+    method: 'POST',
+    token: anaToken,
+    body: { friendId: luisId, action: 'reject' }
+  });
+  assert.equal(rejectAccepted.status, 404);
+  console.log('✓ 10. Security hardening (SSRF, CSP, invisible nick, empty media, blocked invite, pending reject) OK');
+
   anaSocket.disconnect();
   luisSocket.disconnect();
   console.log('\nALL PYTHON FASTAPI + SOCKET.IO E2E TESTS PASSED! 🎉');

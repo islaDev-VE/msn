@@ -66,6 +66,8 @@ export default function ChatWindow({
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const recordingStartRef = useRef(0);
   const audioChunksRef = useRef([]);
   const recordIntervalRef = useRef(null);
 
@@ -120,18 +122,24 @@ export default function ChatWindow({
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
 
       audioChunksRef.current = [];
+      recordingStartRef.current = Date.now();
       recorder.ondataavailable = (ev) => {
         if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
       };
 
       recorder.onstop = () => {
         stream.getTracks().forEach((tr) => tr.stop());
+        if (mediaStreamRef.current === stream) {
+          mediaStreamRef.current = null;
+        }
+        const elapsedSecs = Math.max(1, Math.min(20, Math.round((Date.now() - recordingStartRef.current) / 1000)));
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         if (blob.size < 200) return;
 
@@ -142,7 +150,7 @@ export default function ChatWindow({
           onSendMessage({
             toUserId: contact.id,
             type: 'voice',
-            text: `Clip de voz (${Math.max(1, recordingSeconds)}s)`,
+            text: `Clip de voz (${elapsedSecs}s)`,
             mediaData: reader.result
           });
           setTimeout(() => setTransferProgress(null), 400);
@@ -167,7 +175,7 @@ export default function ChatWindow({
     } catch {
       setLocalError('No se obtuvo permiso para usar el micrófono.');
     }
-  }, [contact.id, onSendMessage, recordingSeconds, stopVoiceRecording]);
+  }, [contact.id, onSendMessage, stopVoiceRecording]);
 
   // F2 keyboard shortcut for retro Voice Clip recording when chat is focused
   useEffect(() => {
@@ -187,6 +195,18 @@ export default function ChatWindow({
     return () => {
       if (recordIntervalRef.current) clearInterval(recordIntervalRef.current);
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.onstop = null;
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {
+          // ignore
+        }
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((tr) => tr.stop());
+        mediaStreamRef.current = null;
+      }
     };
   }, []);
 
@@ -379,7 +399,8 @@ export default function ChatWindow({
 
                 {m.type === 'voice' && m.mediaData && (
                   <div className="z05-voice-player">
-                    <span>🎙️</span>
+                    <span title={m.text || 'Clip de voz'}>🎙️</span>
+                    {m.text && <span style={{ fontSize: 10, color: '#0b3474', fontWeight: 'bold' }}>{m.text}</span>}
                     <audio controls preload="metadata" src={m.mediaData} />
                   </div>
                 )}

@@ -70,7 +70,7 @@ export async function getPushStatus() {
   };
 }
 
-export async function subscribeToWebPush() {
+export async function subscribeToWebPush({ forceResubscribe = false } = {}) {
   if (!isPushSupported()) {
     if (isIosDevice() && !isStandalonePwa()) {
       throw new Error('En iPhone/iPad primero instala Zumbido 05: toca Compartir → "Añadir a pantalla de inicio" y ábrela desde ahí.');
@@ -97,6 +97,10 @@ export async function subscribeToWebPush() {
   }
 
   let sub = await reg.pushManager.getSubscription();
+  if (sub && forceResubscribe) {
+    await sub.unsubscribe().catch(() => {});
+    sub = null;
+  }
   if (!sub) {
     sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from backend.config import (
     ALLOWED_STATUSES,
+    APP_ENV,
     CORS_ORIGIN,
     DIST_DIR,
     OFFLINE_GRACE_SECONDS,
@@ -18,6 +19,7 @@ from backend.config import (
 )
 from backend.database import (
     accept_friend_request,
+    count_user_invitations,
     create_friend_request,
     create_or_get_invitation,
     create_user,
@@ -38,6 +40,7 @@ from backend.database import (
     mark_conversation_read,
     now_ms,
     redeem_invitation,
+    reject_pending_friend_request,
     remove_friendship,
     sanitize_user,
     save_message,
@@ -63,7 +66,11 @@ from backend.security import (
     is_valid_email,
     is_valid_media_data,
     is_valid_password,
+    is_valid_push_endpoint,
+    sanitize_chat_color,
+    sanitize_chat_font,
     sign_token,
+    socket_msg_limiter,
     verify_password,
 )
 
@@ -77,9 +84,22 @@ fastapi_app = FastAPI(title="Zumbido 05 API", version="1.0.0")
 fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=(CORS_ORIGIN != "*"),
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+CSP_HEADER = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com data:; "
+    "img-src 'self' data: blob: https:; "
+    "media-src 'self' data: blob:; "
+    "connect-src 'self' ws: wss: https:; "
+    "frame-ancestors 'self'; "
+    "base-uri 'self'; "
+    "object-src 'none'"
 )
 
 
@@ -90,6 +110,9 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "microphone=(self), camera=(self)"
+    response.headers["Content-Security-Policy"] = CSP_HEADER
+    if APP_ENV == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 
@@ -149,10 +172,18 @@ async def notify_friends_presence(user_id: int):
 
 
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
+    # Uvicorn with --proxy-headers --forwarded-allow-ips=127.0.0.1 sets request.client.host reliably
+    host = request.client.host if request.client else ""
+    if host and host not in ("127.0.0.1", "::1", "localhost"):
+        return host
+    forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+        # Take the right-most non-loopback IP appended by our trusted reverse proxy (Apache)
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        for hop in reversed(hops):
+            if hop not in ("127.0.0.1", "::1", "localhost"):
+                return hop
+    return host or "unknown"
 
 
 def get_current_user(request: Request) -> Optional[dict]:
@@ -282,8 +313,8 @@ async def register(payload: RegisterPayload, request: Request):
         )
 
     clean_nick = (payload.nickname or payload.email.split("@")[0]).strip()[:120]
-    if not clean_nick:
-        return JSONResponse(status_code=400, content={"error": "El nombre para mostrar es obligatorio."})
+    if not clean_nick or not strip_plus_tags(clean_nick):
+        return JSONResponse(status_code=400, content={"error": "El nombre para mostrar debe contener texto visible."})
 
     safe_avatar = payload.avatar if (payload.avatar and is_valid_avatar(payload.avatar)) else "bubbles"
     safe_status = payload.status if (payload.status in ALLOWED_STATUSES) else "online"
@@ -378,8 +409,8 @@ async def update_profile(
 
     updates = {}
     if payload.nickname is not None:
-        if not payload.nickname.strip():
-            return JSONResponse(status_code=400, content={"error": "El apodo no puede estar vacío."})
+        if not payload.nickname.strip() or not strip_plus_tags(payload.nickname):
+            return JSONResponse(status_code=400, content={"error": "El apodo debe contener texto visible."})
         updates["nickname"] = payload.nickname
     if payload.personalMessage is not None:
         updates["personalMessage"] = payload.personalMessage
@@ -495,7 +526,9 @@ async def respond_friend(
         await notify_friends_presence(user["id"])
         await notify_friends_presence(fid)
     else:
-        remove_friendship(user["id"], fid)
+        ok = reject_pending_friend_request(user["id"], fid)
+        if not ok:
+            return JSONResponse(status_code=404, content={"error": "Solicitud pendiente no encontrada."})
         await emit_to_user(fid, "friends_refresh", get_friends_bundle(fid, get_online_user_ids()))
 
     return get_friends_bundle(user["id"], get_online_user_ids())
@@ -585,6 +618,11 @@ async def create_invitation_endpoint(
                     "code": "ALREADY_REGISTERED",
                 },
             )
+        if count_user_invitations(user["id"]) >= 50:
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Alcanzaste el límite de 50 invitaciones activas. Elimina alguna antigua para crear otra."},
+            )
 
     inv = create_or_get_invitation(
         inviter_id=user["id"],
@@ -626,6 +664,8 @@ async def accept_invitation_endpoint(
         return JSONResponse(status_code=404, content={"error": "Este enlace de invitación no existe o fue revocado."})
     if redeemed.get("selfInvite"):
         return JSONResponse(status_code=400, content={"error": "Ese es tu propio enlace de invitación."})
+    if redeemed.get("blocked"):
+        return JSONResponse(status_code=403, content={"error": "No es posible aceptar esta invitación."})
 
     inviter = redeemed["inviter"]
     inviter_id = inviter["id"]
@@ -706,8 +746,10 @@ async def push_subscribe(
 ):
     if not user:
         return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
-    if not payload.endpoint or not payload.endpoint.startswith("https://"):
-        return JSONResponse(status_code=400, content={"error": "Endpoint de notificación inválido."})
+    if not api_limiter.allow(client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "Límite temporal de peticiones alcanzado."})
+    if not is_valid_push_endpoint(payload.endpoint):
+        return JSONResponse(status_code=400, content={"error": "Endpoint de notificación no permitido o inválido."})
     if not payload.keys.p256dh or not payload.keys.auth:
         return JSONResponse(status_code=400, content={"error": "Claves de suscripción incompletas."})
 
@@ -866,6 +908,8 @@ async def send_message(sid, payload):
     user_id = session.get("user_id") if session else None
     if not user_id or not isinstance(payload, dict):
         return {"error": "Sesión o mensaje inválido."}
+    if not socket_msg_limiter.allow(f"u:{user_id}"):
+        return {"error": "Estás enviando mensajes demasiado rápido. Espera unos segundos."}
 
     try:
         to_user_id = int(payload.get("toUserId") or 0)
@@ -877,7 +921,7 @@ async def send_message(sid, payload):
 
     msg_type = payload.get("type") if payload.get("type") in ("text", "ink", "image", "voice") else "text"
     text = payload.get("text") if isinstance(payload.get("text"), str) else ""
-    media_data = payload.get("mediaData")
+    media_data = payload.get("mediaData") if msg_type != "text" else None
 
     rel = get_friendship(user_id, to_user_id)
     if not rel or rel.status != "accepted":
@@ -894,8 +938,8 @@ async def send_message(sid, payload):
         to_user_id=to_user_id,
         msg_type=msg_type,
         text=text,
-        font=payload.get("font") or "Tahoma",
-        color=payload.get("color") or "#000000",
+        font=sanitize_chat_font(payload.get("font")),
+        color=sanitize_chat_color(payload.get("color")),
         is_bold=bool(payload.get("isBold")),
         is_italic=bool(payload.get("isItalic")),
         media_data=media_data,
@@ -987,6 +1031,8 @@ async def send_wink(sid, payload):
     user_id = session.get("user_id") if session else None
     if not user_id or not isinstance(payload, dict):
         return {"error": "Sesión inválida."}
+    if not socket_msg_limiter.allow(f"u:{user_id}"):
+        return {"error": "Demasiadas acciones en poco tiempo. Espera unos segundos."}
 
     try:
         to_user_id = int(payload.get("toUserId") or 0)

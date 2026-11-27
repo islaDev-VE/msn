@@ -40,7 +40,7 @@ ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "
   '${REMOTE_APP_DIR}/.venv/bin/pip' install -q -r '${REMOTE_APP_DIR}/requirements.txt'
   '${REMOTE_APP_DIR}/start.sh' --restart
   APP_PORT=\$(grep -E '^PORT=' '${REMOTE_APP_DIR}/.env' | cut -d= -f2)
-  for _ in \$(seq 1 20); do
+  for _ in \$(seq 1 40); do
     if curl -fsS \"http://127.0.0.1:\${APP_PORT}/api/health\"; then
       echo
       exit 0

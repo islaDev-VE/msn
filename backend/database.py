@@ -126,6 +126,7 @@ def _build_engine(db_url: str):
         def _set_sqlite_pragmas(dbapi_conn, _connection_record):
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA wal_autocheckpoint=200;")
             cursor.execute("PRAGMA foreign_keys=ON;")
             cursor.execute("PRAGMA busy_timeout=5000;")
             cursor.close()
@@ -318,6 +319,24 @@ def remove_friendship(user_id: int, friend_id: int) -> bool:
                     and_(Friendship.user_id == uid, Friendship.friend_id == fid),
                     and_(Friendship.user_id == fid, Friendship.friend_id == uid),
                 )
+            )
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return deleted > 0
+
+
+def reject_pending_friend_request(user_id: int, other_id: int) -> bool:
+    uid, oid = int(user_id), int(other_id)
+    with get_session() as db:
+        deleted = (
+            db.query(Friendship)
+            .filter(
+                Friendship.status == "pending",
+                or_(
+                    and_(Friendship.user_id == uid, Friendship.friend_id == oid),
+                    and_(Friendship.user_id == oid, Friendship.friend_id == uid),
+                ),
             )
             .delete(synchronize_session=False)
         )
@@ -696,6 +715,16 @@ def list_user_invitations(inviter_id: int) -> list[dict]:
         return [format_invitation(r) for r in rows]
 
 
+def count_user_invitations(inviter_id: int) -> int:
+    with get_session() as db:
+        return int(
+            db.query(func.count(Invitation.id))
+            .filter(Invitation.inviter_id == int(inviter_id))
+            .scalar()
+            or 0
+        )
+
+
 def delete_invitation(inviter_id: int, code: str) -> bool:
     clean_code = (code or "").strip()[:32]
     if not clean_code:
@@ -719,7 +748,16 @@ def redeem_invitation(code: str, new_user_id: int) -> Optional[dict]:
         if not inv:
             return None
         if inv.inviter_id == int(new_user_id):
-            return {"selfInvite": True, "code": inv.code}
+            return {"selfInvite": True, "blocked": False, "code": inv.code}
+        inviter_id = inv.inviter_id
+
+    if is_blocked_between(inviter_id, int(new_user_id)):
+        return {"selfInvite": False, "blocked": True, "code": clean_code}
+
+    with get_session() as db:
+        inv = db.query(Invitation).filter(Invitation.code == clean_code).first()
+        if not inv:
+            return None
         inviter = db.get(User, inv.inviter_id)
         if not inviter:
             return None
@@ -731,6 +769,7 @@ def redeem_invitation(code: str, new_user_id: int) -> Optional[dict]:
     rel = create_accepted_friendship(inviter_id, int(new_user_id))
     return {
         "selfInvite": False,
+        "blocked": False,
         "code": clean_code,
         "inviter": inviter_dict,
         "alreadyFriends": rel["already_friends"],

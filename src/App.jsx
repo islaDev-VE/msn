@@ -129,12 +129,14 @@ export default function App() {
   const profileRef = useRef(profile);
   const openChatIdsRef = useRef(openChatIds);
   const friendsRef = useRef(friends);
+  const chatHistoriesRef = useRef(chatHistories);
 
   useEffect(() => { activeWindowRef.current = activeWindowId; }, [activeWindowId]);
   useEffect(() => { minimizedRef.current = minimizedWindows; }, [minimizedWindows]);
   useEffect(() => { profileRef.current = profile; }, [profile]);
   useEffect(() => { openChatIdsRef.current = openChatIds; }, [openChatIds]);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
+  useEffect(() => { chatHistoriesRef.current = chatHistories; }, [chatHistories]);
 
   // Responsive matchMedia + visualViewport keyboard adaptation
   useEffect(() => {
@@ -222,13 +224,12 @@ export default function App() {
   }, [token, applyFriendsBundle]);
 
   const loadHistory = useCallback(async (friendId, { loadOlder = false } = {}) => {
-    let beforeId = null;
+    const snapshot = chatHistoriesRef.current[friendId] || { items: [], hasMore: false, loaded: false, loading: false };
+    if (snapshot.loading) return;
+    const beforeId = loadOlder && snapshot.items.length > 0 ? snapshot.items[0].id : null;
+
     setChatHistories((prev) => {
       const current = prev[friendId] || { items: [], hasMore: false, loaded: false, loading: false };
-      if (current.loading) return prev;
-      if (loadOlder && current.items.length > 0) {
-        beforeId = current.items[0].id;
-      }
       return {
         ...prev,
         [friendId]: { ...current, loading: true }
@@ -632,16 +633,36 @@ export default function App() {
     setOpenChatIds((prev) => prev.filter((id) => id !== friendId));
   };
 
+  const showChatNotice = useCallback((friendId, message) => {
+    if (!friendId || !message) return;
+    setCooldownByFriend((prev) => ({ ...prev, [friendId]: message }));
+    setTimeout(() => {
+      setCooldownByFriend((prev) => (prev[friendId] === message ? { ...prev, [friendId]: '' } : prev));
+    }, 4200);
+  }, []);
+
   const handleSendMessage = (payload) => {
-    socketRef.current?.emit('send_message', payload);
+    socketRef.current?.emit('send_message', payload, (ack) => {
+      if (ack?.error) {
+        showChatNotice(payload.toUserId, ack.error);
+      }
+    });
   };
 
   const handleSendNudge = (toUserId) => {
-    socketRef.current?.emit('send_nudge', { toUserId });
+    socketRef.current?.emit('send_nudge', { toUserId }, (ack) => {
+      if (ack?.error && !ack?.cooldown) {
+        showChatNotice(toUserId, ack.error);
+      }
+    });
   };
 
   const handleSendWink = (toUserId, winkId) => {
-    socketRef.current?.emit('send_wink', { toUserId, winkId });
+    socketRef.current?.emit('send_wink', { toUserId, winkId }, (ack) => {
+      if (ack?.error) {
+        showChatNotice(toUserId, ack.error);
+      }
+    });
   };
 
   const handleTypingStatus = (toUserId, isTyping) => {
@@ -691,6 +712,21 @@ export default function App() {
       await api.sendTestPush();
       setPushMessage('✓ Notificación de prueba enviada a tu dispositivo.');
     } catch (err) {
+      // Auto-recover if Chrome rotated/expired the PushSubscription (410 Gone -> 502 / 400)
+      if (err?.status === 400 || err?.status === 502) {
+        try {
+          await subscribeToWebPush({ forceResubscribe: true });
+          const st = await getPushStatus();
+          setPushStatus(st);
+          setNotificationPermission(st.permission);
+          await api.sendTestPush();
+          setPushMessage('✓ Suscripción renovada y notificación de prueba enviada a tu dispositivo.');
+          return;
+        } catch (retryErr) {
+          setPushMessage(`⚠️ ${retryErr.message || 'No se pudo renovar ni enviar la notificación de prueba.'}`);
+          return;
+        }
+      }
       setPushMessage(`⚠️ ${err.message || 'No se pudo enviar la notificación de prueba.'}`);
     } finally {
       setPushBusy(false);

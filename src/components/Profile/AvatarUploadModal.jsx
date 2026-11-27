@@ -4,7 +4,8 @@ import { compressAvatar } from '../../services/imageProcessor';
 import {
   QUICK_PLUS_COLORS,
   RETRO_2005_SONGS,
-  renderFormattedText
+  renderFormattedText,
+  stripPlusTags
 } from '../../services/plusFormatter';
 
 export default function AvatarUploadModal({ profile, onSave, onClose }) {
@@ -41,8 +42,8 @@ export default function AvatarUploadModal({ profile, onSave, onClose }) {
 
   const handleSave = async (e) => {
     e.preventDefault();
-    if (!nickname.trim()) {
-      setError('Tu nombre para mostrar no puede estar vacío.');
+    if (!nickname.trim() || !stripPlusTags(nickname).trim()) {
+      setError('Tu nombre para mostrar debe contener texto visible.');
       return;
     }
     setSaving(true);
