@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import math
 from typing import Optional
 
@@ -239,12 +240,23 @@ class PushUnsubscribePayload(BaseModel):
 # REST API ENDPOINTS
 # ========================
 
+def _get_frontend_build_id() -> str:
+    index_file = DIST_DIR / "index.html"
+    if not index_file.is_file():
+        return "dev"
+    try:
+        return hashlib.sha256(index_file.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return "unknown"
+
+
 @fastapi_app.get("/api/health")
 async def health_check():
     return {
         "status": "ok",
         "service": "zumbido-05",
         "runtime": "python-fastapi",
+        "buildId": _get_frontend_build_id(),
         "activeUsers": len(get_online_user_ids()),
         "timestamp": now_ms(),
     }
@@ -1050,6 +1062,19 @@ async def mark_read(sid, payload):
 # STATIC BUILT FRONTEND (SPA + PWA)
 # ========================
 
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+IMMUTABLE_HEADERS = {
+    "Cache-Control": "public, max-age=31536000, immutable",
+}
+SHORT_CACHE_HEADERS = {
+    "Cache-Control": "public, max-age=3600",
+}
+
+
 @fastapi_app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     if full_path.startswith("api/"):
@@ -1063,11 +1088,18 @@ async def serve_spa(full_path: str):
             return JSONResponse(status_code=403, content={"error": "Acceso denegado."})
 
         if full_path and candidate.is_file():
-            return FileResponse(candidate)
+            normalized = full_path.lstrip("/")
+            if normalized in ("sw.js", "manifest.json", "index.html"):
+                headers = NO_CACHE_HEADERS
+            elif normalized.startswith("assets/"):
+                headers = IMMUTABLE_HEADERS
+            else:
+                headers = SHORT_CACHE_HEADERS
+            return FileResponse(candidate, headers=headers)
 
         index_file = DIST_DIR / "index.html"
         if index_file.is_file():
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers=NO_CACHE_HEADERS)
 
     return JSONResponse(
         status_code=200,

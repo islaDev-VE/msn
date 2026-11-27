@@ -1,4 +1,4 @@
-const CACHE_NAME = 'zumbido-05-v2';
+const CACHE_NAME = 'zumbido-05-v3';
 const STATIC_SHELL = [
   '/',
   '/manifest.json',
@@ -35,8 +35,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  const isNavigation =
+    request.mode === 'navigate' ||
+    url.pathname === '/' ||
+    url.pathname === '/index.html';
+
+  const networkRequest = isNavigation
+    ? new Request(request, { cache: 'no-store' })
+    : request;
+
   event.respondWith(
-    fetch(request)
+    fetch(networkRequest)
       .then((response) => {
         if (response && response.status === 200 && url.origin === self.location.origin) {
           const cloned = response.clone();

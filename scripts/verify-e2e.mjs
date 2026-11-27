@@ -73,10 +73,17 @@ try {
   assert.equal(health.status, 'ok');
   assert.equal(health.service, 'zumbido-05');
   assert.equal(health.runtime, 'python-fastapi');
-  console.log('✓ 1. Python FastAPI health endpoint OK');
+  assert.ok(typeof health.buildId === 'string' && health.buildId.length >= 3);
+  console.log('✓ 1. Python FastAPI health & buildId endpoint OK');
 
-  // 2. PWA & Static endpoints
-  for (const asset of ['/manifest.json', '/sw.js', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png']) {
+  // 2. PWA & Static endpoints + Cache-Control headers
+  for (const asset of ['/', '/manifest.json', '/sw.js']) {
+    const r = await fetch(`${BASE_URL}${asset}`);
+    assert.equal(r.status, 200, `Expected 200 for ${asset}`);
+    const cc = (r.headers.get('cache-control') || '').toLowerCase();
+    assert.ok(cc.includes('no-store'), `Expected Cache-Control no-store for ${asset}, got: ${cc}`);
+  }
+  for (const asset of ['/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png']) {
     const r = await fetch(`${BASE_URL}${asset}`);
     assert.equal(r.status, 200, `Expected 200 for ${asset}`);
   }

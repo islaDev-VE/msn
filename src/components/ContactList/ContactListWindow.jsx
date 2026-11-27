@@ -28,6 +28,8 @@ export default function ContactListWindow({
   pushBusy = false,
   pushMessage = '',
   onTestPush,
+  onCheckAppUpdate,
+  appUpdateAvailable = false,
   onLogout,
   onMinimize,
   isFocused,
@@ -321,6 +323,15 @@ export default function ContactListWindow({
           🌐 isladev.com
         </a>
       </div>
+
+      <button
+        type="button"
+        className={`c05-btn ${appUpdateAvailable ? 'c05-btn-primary' : ''}`}
+        style={{ padding: '10px 14px' }}
+        onClick={onCheckAppUpdate}
+      >
+        {appUpdateAvailable ? '✨ Actualizar a la nueva versión ahora' : '🔄 Buscar actualización de la app'}
+      </button>
 
       <button type="button" className="c05-btn" style={{ padding: '10px 14px' }} onClick={onOpenAbout}>
         ℹ️ Desarrollador y Acerca de Zumbido 05

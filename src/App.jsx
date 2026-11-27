@@ -118,6 +118,8 @@ export default function App() {
   });
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState('');
+  const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
+  const initialBuildIdRef = useRef(null);
 
   const socketRef = useRef(null);
   const activeWindowRef = useRef(activeWindowId);
@@ -473,6 +475,27 @@ export default function App() {
       });
   }, [token, profile?.id, pendingInviteCode, applyFriendsBundle, showToaster]);
 
+  // Track deployed buildId so mobile PWAs automatically detect new versions
+  const checkServerBuildVersion = useCallback(async () => {
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data?.buildId) return;
+      if (!initialBuildIdRef.current) {
+        initialBuildIdRef.current = data.buildId;
+      } else if (initialBuildIdRef.current !== data.buildId) {
+        setAppUpdateAvailable(true);
+      }
+    } catch {
+      // ignore offline check
+    }
+  }, []);
+
+  useEffect(() => {
+    checkServerBuildVersion();
+  }, [checkServerBuildVersion]);
+
   // Instant mobile reconnect & chat sync whenever screen wakes up or network returns
   useEffect(() => {
     if (!token || !profile?.id) return;
@@ -480,6 +503,7 @@ export default function App() {
     const handleResume = () => {
       if (document.visibilityState === 'hidden') return;
       reconnectSocketNow();
+      checkServerBuildVersion();
       api.getFriends().then(applyFriendsBundle).catch(() => {});
       openChatIdsRef.current.forEach((fid) => {
         loadHistory(fid);
@@ -497,7 +521,7 @@ export default function App() {
       window.removeEventListener('focus', handleResume);
       window.removeEventListener('online', handleResume);
     };
-  }, [token, profile?.id, applyFriendsBundle, loadHistory]);
+  }, [token, profile?.id, applyFriendsBundle, loadHistory, checkServerBuildVersion]);
 
   // Sync Web Push subscription status & silently refresh existing subscription on login
   useEffect(() => {
@@ -671,6 +695,22 @@ export default function App() {
     }
   };
 
+  const handleForceUpdateApp = async () => {
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.update().catch(() => {})));
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch {
+      // fallback to reload anyway
+    }
+    window.location.reload();
+  };
+
   const isLoggedIn = Boolean(profile);
   const totalUnreadCount = friends.reduce((sum, f) => sum + (f.unreadCount || 0), 0);
 
@@ -775,6 +815,24 @@ export default function App() {
       totalUnreadCount={totalUnreadCount}
       pendingRequestCount={incomingRequests.length}
     >
+      {/* 0. New Version Available Banner */}
+      {appUpdateAvailable && (
+        <div
+          className="c05-reconnect-banner"
+          style={{ background: '#e0f2fe', borderColor: '#0284c7', color: '#0c4a6e', top: 10 }}
+        >
+          <span>✨ Nueva versión de Zumbido 05 lista.</span>
+          <button
+            type="button"
+            className="c05-btn c05-btn-primary"
+            style={{ fontSize: 11, padding: '2px 8px' }}
+            onClick={handleForceUpdateApp}
+          >
+            🔄 Actualizar ahora
+          </button>
+        </div>
+      )}
+
       {/* 1. Authentication Window */}
       {!isLoggedIn && (
         <AuthModal
@@ -808,6 +866,8 @@ export default function App() {
           pushBusy={pushBusy}
           pushMessage={pushMessage}
           onTestPush={handleTestPush}
+          onCheckAppUpdate={handleForceUpdateApp}
+          appUpdateAvailable={appUpdateAvailable}
           onLogout={handleLogout}
           onMinimize={() => handleMinimize('contactList')}
           isFocused={activeWindowId === 'contactList'}
