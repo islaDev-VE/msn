@@ -352,7 +352,22 @@ try {
   });
   assert.equal(unsubRes.status, 200);
   assert.equal(unsubRes.data.removed, true);
-  console.log('✓ 9. islaDev assets & Web Push VAPID subscribe/unsubscribe OK');
+
+  // Verify persisted VAPID PEM key loads as a valid Vapid01 instance and signs FCM claims
+  const { execFileSync } = await import('node:child_process');
+  const signOut = execFileSync(
+    pythonBin,
+    [
+      '-c',
+      'import os; from backend.push import _load_or_create_vapid_keys; k=_load_or_create_vapid_keys(); h=k["vapid"].sign({"aud":"https://fcm.googleapis.com","sub":k["subject"]}); assert "Authorization" in h; print("SIGN_OK")'
+    ],
+    {
+      env: { ...process.env, VAPID_KEYS_FILE: path.join(tmpDir, 'vapid.json') },
+      encoding: 'utf-8'
+    }
+  ).trim();
+  assert.equal(signOut, 'SIGN_OK');
+  console.log('✓ 9. islaDev assets & Web Push VAPID subscribe/unsubscribe/sign OK');
 
   anaSocket.disconnect();
   luisSocket.disconnect();

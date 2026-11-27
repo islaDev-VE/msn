@@ -36,6 +36,13 @@ def strip_plus_tags(text: str) -> str:
     return _PLUS_TAG_RE.sub("", text or "").strip()
 
 
+def _build_vapid_instance(raw_private_key: str):
+    cleaned = raw_private_key.replace("\\n", "\n").strip()
+    if "-----BEGIN" in cleaned:
+        return Vapid01.from_pem(cleaned.encode("ascii"))
+    return Vapid01.from_string(private_key=cleaned)
+
+
 def _load_or_create_vapid_keys() -> Optional[dict]:
     global _vapid_cache
     if _vapid_cache is not None:
@@ -45,9 +52,11 @@ def _load_or_create_vapid_keys() -> Optional[dict]:
 
     # 1. Explicit env vars take precedence
     if VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY:
+        priv = VAPID_PRIVATE_KEY.replace("\\n", "\n")
         _vapid_cache = {
             "publicKey": VAPID_PUBLIC_KEY,
-            "privateKey": VAPID_PRIVATE_KEY.replace("\\n", "\n"),
+            "privateKey": priv,
+            "vapid": _build_vapid_instance(priv),
             "subject": VAPID_SUBJECT,
         }
         return _vapid_cache
@@ -61,11 +70,12 @@ def _load_or_create_vapid_keys() -> Optional[dict]:
                 _vapid_cache = {
                     "publicKey": data["publicKey"],
                     "privateKey": data["privateKey"],
+                    "vapid": _build_vapid_instance(data["privateKey"]),
                     "subject": VAPID_SUBJECT,
                 }
                 return _vapid_cache
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[Zumbido 05 Push] Error leyendo {keys_path}: {exc}", flush=True)
 
     # 3. Generate new EC P-256 VAPID keypair and persist with 0600 permissions
     vapid = Vapid01()
@@ -90,6 +100,7 @@ def _load_or_create_vapid_keys() -> Optional[dict]:
     _vapid_cache = {
         "publicKey": pub_b64,
         "privateKey": priv_pem,
+        "vapid": vapid,
         "subject": VAPID_SUBJECT,
     }
     return _vapid_cache
@@ -100,7 +111,7 @@ def get_vapid_public_key() -> Optional[str]:
     return keys["publicKey"] if keys else None
 
 
-def _send_single_webpush(sub: dict, payload_json: str, private_key: str, subject: str) -> str:
+def _send_single_webpush(sub: dict, payload_json: str, vapid_obj, subject: str) -> tuple[str, Optional[str]]:
     try:
         webpush(
             subscription_info={
@@ -108,19 +119,25 @@ def _send_single_webpush(sub: dict, payload_json: str, private_key: str, subject
                 "keys": sub["keys"],
             },
             data=payload_json,
-            vapid_private_key=private_key,
+            vapid_private_key=vapid_obj,
             vapid_claims={"sub": subject},
             ttl=86400,
+            timeout=15,
+            headers={"Urgency": "high"},
         )
-        return "ok"
+        return ("ok", None)
     except WebPushException as exc:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
+        resp = getattr(exc, "response", None)
+        status = getattr(resp, "status_code", None)
+        body = (getattr(resp, "text", "") or "")[:200]
+        print(f"[Zumbido 05 Push] WebPushException status={status} body={body!r}", flush=True)
         if status in (404, 410):
             delete_push_subscription_by_endpoint(sub["endpoint"])
-            return "expired"
-        return "error"
-    except Exception:
-        return "error"
+            return ("expired", f"HTTP {status}")
+        return ("error", f"HTTP {status}: {body}" if status else str(exc))
+    except Exception as exc:
+        print(f"[Zumbido 05 Push] Error inesperado enviando push: {exc!r}", flush=True)
+        return ("error", str(exc))
 
 
 async def send_push_to_user(
@@ -136,11 +153,11 @@ async def send_push_to_user(
 ) -> dict:
     keys = _load_or_create_vapid_keys()
     if not keys:
-        return {"sent": 0, "total": 0}
+        return {"sent": 0, "total": 0, "failed": 0, "lastError": "VAPID no disponible"}
 
     subs = get_user_push_subscriptions(user_id)
     if not subs:
-        return {"sent": 0, "total": 0}
+        return {"sent": 0, "total": 0, "failed": 0, "lastError": None}
 
     payload_json = json.dumps(
         {
@@ -161,15 +178,27 @@ async def send_push_to_user(
                 _send_single_webpush,
                 sub,
                 payload_json,
-                keys["privateKey"],
+                keys["vapid"],
                 keys["subject"],
             )
             for sub in subs
         ],
         return_exceptions=True,
     )
-    sent = sum(1 for r in results if r == "ok")
-    return {"sent": sent, "total": len(subs)}
+    sent = 0
+    failed = 0
+    last_error = None
+    for r in results:
+        if isinstance(r, tuple) and r[0] == "ok":
+            sent += 1
+        else:
+            failed += 1
+            if isinstance(r, tuple) and r[1]:
+                last_error = r[1]
+            elif isinstance(r, Exception):
+                last_error = str(r)
+
+    return {"sent": sent, "total": len(subs), "failed": failed, "lastError": last_error}
 
 
 def schedule_push_to_user(user_id: int, **kwargs) -> None:

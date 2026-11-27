@@ -759,6 +759,14 @@ async def push_test(
             status_code=400,
             content={"error": "Este dispositivo aún no está suscrito a notificaciones Push."},
         )
+    if res["sent"] == 0:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "No se pudo entregar la notificación al servicio Push. Reintenta o vuelve a activar las notificaciones.",
+                "detail": res.get("lastError"),
+            },
+        )
     return {"ok": True, **res}
 
 
