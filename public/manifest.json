@@ -1,26 +1,52 @@
 {
+  "id": "/",
   "name": "Zumbido 05 — Mensajería Retro",
   "short_name": "Zumbido 05",
-  "description": "Mensajería instantánea nostálgica estilo 2005 con zumbidos, guiños, tinta manuscrita, fotos y clips de voz.",
+  "description": "Mensajería instantánea nostálgica estilo 2005 con zumbidos, guiños, tinta manuscrita, fotos, clips de voz y notificaciones Push.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay"],
   "orientation": "portrait-primary",
   "background_color": "#004e98",
   "theme_color": "#0055ea",
   "lang": "es",
+  "categories": ["social", "communication"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Contactos",
+      "short_name": "Contactos",
+      "description": "Abrir lista de contactos de Zumbido 05",
+      "url": "/",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Invitar amigos",
+      "short_name": "Invitar",
+      "description": "Compartir tu enlace mágico de Zumbido 05",
+      "url": "/?action=invite",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ]
 }

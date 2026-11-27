@@ -14,6 +14,7 @@ from backend.config import (
 )
 from backend.database import (
     delete_push_subscription_by_endpoint,
+    get_user_pending_badge_count,
     get_user_push_subscriptions,
 )
 
@@ -150,6 +151,7 @@ async def send_push_to_user(
     data: Optional[dict] = None,
     vibrate: Optional[list[int]] = None,
     force: bool = False,
+    badge_count: Optional[int] = None,
 ) -> dict:
     keys = _load_or_create_vapid_keys()
     if not keys:
@@ -159,6 +161,12 @@ async def send_push_to_user(
     if not subs:
         return {"sent": 0, "total": 0, "failed": 0, "lastError": None}
 
+    resolved_badge = (
+        int(badge_count)
+        if badge_count is not None
+        else max(1, get_user_pending_badge_count(user_id))
+    )
+
     payload_json = json.dumps(
         {
             "title": strip_plus_tags(title) or "Zumbido 05",
@@ -167,6 +175,7 @@ async def send_push_to_user(
             "tag": tag or "zumbido-05-msg",
             "vibrate": vibrate or [140, 60, 140],
             "force": force,
+            "badgeCount": resolved_badge,
             "data": data or {},
         },
         ensure_ascii=False,

@@ -242,7 +242,7 @@ export default function ContactListWindow({
         </div>
 
         <div style={{ fontSize: 11, color: '#455a75', lineHeight: 1.4 }}>
-          Recibe mensajes, zumbidos y solicitudes en tu teléfono aunque bloquees la pantalla o cierres la app.
+          Recibe mensajes, zumbidos y solicitudes en tu teléfono aunque bloquees la pantalla o cierres la app. Para ver el punto/número en el ícono, instálala como <strong>Aplicación</strong> (no como acceso directo).
         </div>
 
         {pushStatus.needsIosInstall && (

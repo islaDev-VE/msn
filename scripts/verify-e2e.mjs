@@ -323,11 +323,23 @@ try {
   assert.equal(revokedLookup.status, 404);
   console.log('✓ 8. Magic invitation links, auto-friendship, real-time notification & revocation OK');
 
-  // 9. islaDev branding assets & Web Push (VAPID) subscription endpoints
-  for (const asset of ['/icons/isladev-icon.png', '/icons/isladev-logo.png']) {
+  // 9. islaDev branding assets, WebAPK manifest & Web Push (VAPID) subscription endpoints
+  for (const asset of [
+    '/icons/isladev-icon.png',
+    '/icons/isladev-logo.png',
+    '/icons/badge-72.png',
+    '/icons/icon-maskable-512.png'
+  ]) {
     const r = await fetch(`${BASE_URL}${asset}`);
     assert.equal(r.status, 200, `Expected 200 for ${asset}`);
   }
+  const manifestRes = await fetch(`${BASE_URL}/manifest.json`);
+  const manifestJson = await manifestRes.json();
+  assert.equal(manifestJson.id, '/');
+  assert.equal(manifestJson.prefer_related_applications, false);
+  assert.ok(manifestJson.icons.some((i) => i.purpose === 'any'));
+  assert.ok(manifestJson.icons.some((i) => i.purpose === 'maskable'));
+
   const vapidRes = await apiReq('/api/push/public-key');
   assert.equal(vapidRes.status, 200);
   assert.equal(vapidRes.data.enabled, true);

@@ -824,3 +824,25 @@ def delete_push_subscription_by_endpoint(endpoint: str) -> bool:
         return deleted > 0
 
 
+def get_user_pending_badge_count(user_id: int) -> int:
+    uid = int(user_id)
+    with get_session() as db:
+        unread_msgs = (
+            db.query(func.count(Message.id))
+            .filter(Message.to_user_id == uid, Message.is_read.is_(False))
+            .scalar()
+            or 0
+        )
+        pending_reqs = (
+            db.query(func.count(Friendship.id))
+            .filter(
+                Friendship.user_id == uid,
+                Friendship.status == "pending",
+                Friendship.requester_id != uid,
+            )
+            .scalar()
+            or 0
+        )
+        return int(unread_msgs) + int(pending_reqs)
+
+

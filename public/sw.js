@@ -1,10 +1,12 @@
-const CACHE_NAME = 'zumbido-05-v3';
+const CACHE_NAME = 'zumbido-05-v4';
 const STATIC_SHELL = [
   '/',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
   '/icons/apple-touch-icon.png',
+  '/icons/badge-72.png',
   '/icons/isladev-icon.png',
   '/icons/isladev-logo.png'
 ];
@@ -57,6 +59,25 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
+async function applySwAppBadge(count) {
+  try {
+    const safeCount = Math.max(0, Number(count) || 0);
+    if (safeCount > 0) {
+      if (self.navigator && typeof self.navigator.setAppBadge === 'function') {
+        await self.navigator.setAppBadge(safeCount);
+      } else if (self.registration && typeof self.registration.setAppBadge === 'function') {
+        await self.registration.setAppBadge(safeCount);
+      }
+    } else if (self.navigator && typeof self.navigator.clearAppBadge === 'function') {
+      await self.navigator.clearAppBadge();
+    } else if (self.registration && typeof self.registration.clearAppBadge === 'function') {
+      await self.registration.clearAppBadge();
+    }
+  } catch {
+    // ignore unsupported badge API
+  }
+}
+
 self.addEventListener('push', (event) => {
   let payload = {
     title: 'Zumbido 05',
@@ -64,6 +85,7 @@ self.addEventListener('push', (event) => {
     url: '/',
     tag: 'zumbido-05-msg',
     vibrate: [140, 60, 140],
+    badgeCount: 1,
     data: {}
   };
 
@@ -79,20 +101,26 @@ self.addEventListener('push', (event) => {
   }
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      // Skip duplicate OS notification only if a Zumbido 05 tab is actively focused (except explicit test/nudge pushes)
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       const hasFocusedClient = clients.some(
         (c) => c.visibilityState === 'visible' && c.focused
       );
       const forceNotify = Boolean(payload.force || payload.data?.kind === 'nudge' || payload.data?.kind === 'test');
+
+      if (!hasFocusedClient || forceNotify) {
+        const badgeCount = typeof payload.badgeCount === 'number' ? Math.max(1, payload.badgeCount) : 1;
+        await applySwAppBadge(badgeCount);
+      }
+
       if (hasFocusedClient && !forceNotify) {
         return;
       }
 
-      return self.registration.showNotification(payload.title, {
+      await self.registration.showNotification(payload.title, {
         body: payload.body,
         icon: '/icons/icon-192.png',
-        badge: '/icons/icon-192.png',
+        badge: '/icons/badge-72.png',
         tag: payload.tag || 'zumbido-05-msg',
         renotify: true,
         vibrate: Array.isArray(payload.vibrate) ? payload.vibrate : [140, 60, 140],
@@ -101,7 +129,7 @@ self.addEventListener('push', (event) => {
           ...(payload.data || {})
         }
       });
-    })
+    })()
   );
 });
 

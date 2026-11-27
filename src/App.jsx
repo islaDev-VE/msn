@@ -12,6 +12,7 @@ import { api, getStoredToken, setStoredToken } from './services/api';
 import { connectSocket, disconnectSocket, reconnectSocketNow } from './services/socket';
 import {
   getPushStatus,
+  isStandalonePwa,
   subscribeToWebPush,
   syncExistingPushSubscription,
   unsubscribeFromWebPush,
@@ -119,6 +120,7 @@ export default function App() {
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState('');
   const [appUpdateAvailable, setAppUpdateAvailable] = useState(false);
+  const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
   const initialBuildIdRef = useRef(null);
 
   const socketRef = useRef(null);
@@ -714,10 +716,28 @@ export default function App() {
   const isLoggedIn = Boolean(profile);
   const totalUnreadCount = friends.reduce((sum, f) => sum + (f.unreadCount || 0), 0);
 
-  // Sync PWA App Icon Badge with unread messages + pending requests
+  // Sync PWA App Icon Badge & browser tab title with unread messages + pending requests
   useEffect(() => {
-    updateAppBadge(isLoggedIn ? totalUnreadCount + incomingRequests.length : 0);
+    const pendingTotal = isLoggedIn ? totalUnreadCount + incomingRequests.length : 0;
+    updateAppBadge(pendingTotal);
+    document.title = pendingTotal > 0
+      ? `(${pendingTotal}) Zumbido 05 — Mensajería Retro`
+      : 'Zumbido 05 — Mensajería Retro por islaDev';
   }, [isLoggedIn, totalUnreadCount, incomingRequests.length]);
+
+  // Support manifest shortcut /?action=invite when logged in
+  useEffect(() => {
+    if (!isLoggedIn || typeof window === 'undefined') return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('action') === 'invite') {
+        setAddFriendModalTab('invite');
+        clearQueryParamFromUrl('action');
+      }
+    } catch {
+      // ignore
+    }
+  }, [isLoggedIn]);
 
   const openFriends = openChatIds
     .map((fid) => friends.find((f) => f.id === fid))
@@ -830,6 +850,42 @@ export default function App() {
           >
             🔄 Actualizar ahora
           </button>
+        </div>
+      )}
+
+      {/* 0b. Direct App-Only (WebAPK) Install Banner — skips Chrome's 2-option Shortcut menu */}
+      {Boolean(deferredInstallPrompt) && !isStandalonePwa() && !installBannerDismissed && !appUpdateAvailable && (
+        <div
+          className="c05-reconnect-banner"
+          style={{
+            background: 'linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%)',
+            borderColor: '#0055ea',
+            color: '#0b3474',
+            top: 10,
+            maxWidth: '94vw',
+            flexWrap: 'wrap',
+            justifyContent: 'center'
+          }}
+        >
+          <span>📲 Instala <strong>Zumbido 05</strong> como aplicación (notificaciones e ícono)</span>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <button
+              type="button"
+              className="c05-btn c05-btn-primary"
+              style={{ fontSize: 11, padding: '3px 10px' }}
+              onClick={handleInstallPwa}
+            >
+              Instalar app
+            </button>
+            <button
+              type="button"
+              onClick={() => setInstallBannerDismissed(true)}
+              style={{ background: 'none', border: 'none', color: '#316ac5', cursor: 'pointer', fontSize: 12, padding: '0 4px' }}
+              title="Ocultar"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 
