@@ -1,4 +1,4 @@
-const CACHE_NAME = 'zumbido-05-v4';
+const CACHE_NAME = 'zumbido-05-v5';
 const STATIC_SHELL = [
   '/',
   '/manifest.json',
@@ -137,13 +137,20 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const notifData = event.notification.data || {};
   const friendId = notifData.friendId ? Number(notifData.friendId) : null;
-  const targetUrl = friendId ? `/?chat=${encodeURIComponent(friendId)}` : (notifData.url || '/');
+  const groupId = notifData.groupId ? Number(notifData.groupId) : null;
+  const targetUrl = groupId
+    ? `/?group=${encodeURIComponent(groupId)}`
+    : friendId
+      ? `/?chat=${encodeURIComponent(friendId)}`
+      : (notifData.url || '/');
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
         if ('focus' in client) {
-          if (friendId) {
+          if (groupId) {
+            client.postMessage({ type: 'OPEN_GROUP', groupId });
+          } else if (friendId) {
             client.postMessage({ type: 'OPEN_CHAT', friendId });
           }
           return client.focus();

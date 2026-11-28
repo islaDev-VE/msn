@@ -19,7 +19,9 @@ from backend.config import (
 )
 from backend.database import (
     accept_friend_request,
+    add_group_members,
     count_user_invitations,
+    create_chat_group,
     create_friend_request,
     create_or_get_invitation,
     create_user,
@@ -30,22 +32,31 @@ from backend.database import (
     get_conversation_messages,
     get_friends_bundle,
     get_friendship,
+    get_group_member_ids,
+    get_group_messages,
     get_invitation_by_code,
     get_user_by_email_raw,
     get_user_by_id,
+    get_user_group_ids,
+    get_user_groups_bundle,
     get_user_push_subscriptions,
     init_db,
     is_blocked_between,
+    is_user_in_group,
+    leave_chat_group,
     list_user_invitations,
     mark_conversation_read,
+    mark_group_read,
     now_ms,
     redeem_invitation,
     reject_pending_friend_request,
     remove_friendship,
     sanitize_user,
+    save_group_message,
     save_message,
     save_push_subscription,
     set_friend_blocked,
+    toggle_message_reaction,
     touch_user_last_seen,
     update_friend_group,
     update_user_profile,
@@ -57,6 +68,7 @@ from backend.push import (
     strip_plus_tags,
 )
 from backend.security import (
+    ALLOWED_REACTION_EMOJIS,
     api_limiter,
     auth_limiter,
     check_nudge_cooldown,
@@ -169,6 +181,15 @@ async def notify_friends_presence(user_id: int):
                 "lastSeen": user["lastSeen"],
             },
         )
+    group_ids = get_user_group_ids(user_id)
+    if group_ids:
+        co_members: set[int] = set()
+        for gid in group_ids:
+            for mid in get_group_member_ids(gid):
+                if mid != user_id and mid in online_ids:
+                    co_members.add(mid)
+        for mid in co_members:
+            await emit_to_user(mid, "groups_refresh", {"groups": get_user_groups_bundle(mid, online_ids)})
 
 
 def client_ip(request: Request) -> str:
@@ -265,6 +286,16 @@ class PushSubscribePayload(BaseModel):
 
 class PushUnsubscribePayload(BaseModel):
     endpoint: str
+
+
+class GroupCreatePayload(BaseModel):
+    name: str
+    memberIds: list[int]
+    avatar: Optional[str] = "💬"
+
+
+class GroupAddMembersPayload(BaseModel):
+    memberIds: list[int]
 
 
 # ========================
@@ -724,7 +755,136 @@ async def read_messages(friend_id: int, user: Optional[dict] = Depends(require_u
         return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
     updated_count = mark_conversation_read(user["id"], friend_id)
     await emit_to_user(user["id"], "conversation_read", {"friendId": friend_id})
+    if updated_count > 0:
+        await emit_to_user(friend_id, "friend_read_messages", {"byUserId": user["id"], "readAt": now_ms()})
     return {"ok": True, "updatedCount": updated_count}
+
+
+# --- GROUP CHATS ---
+
+async def notify_groups_for_members(member_ids: list[int], group_id: Optional[int] = None):
+    online_ids = get_online_user_ids()
+    for mid in set(member_ids):
+        if group_id is not None:
+            for sid in user_sockets.get(mid, set()):
+                await sio.enter_room(sid, f"group:{group_id}")
+        if mid in online_ids:
+            await emit_to_user(mid, "groups_refresh", {"groups": get_user_groups_bundle(mid, online_ids)})
+
+
+@fastapi_app.get("/api/groups")
+async def list_groups(user: Optional[dict] = Depends(require_user)):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    return {"groups": get_user_groups_bundle(user["id"], get_online_user_ids())}
+
+
+@fastapi_app.post("/api/groups")
+async def create_group_endpoint(
+    payload: GroupCreatePayload,
+    request: Request,
+    user: Optional[dict] = Depends(require_user),
+):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    if not api_limiter.allow(client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "Límite temporal de peticiones alcanzado."})
+    clean_name = (payload.name or "").strip()
+    if len(clean_name) < 2:
+        return JSONResponse(status_code=400, content={"error": "El nombre de la sala debe tener al menos 2 caracteres."})
+
+    created = create_chat_group(
+        creator_id=user["id"],
+        name=clean_name,
+        member_ids=payload.memberIds,
+        avatar=payload.avatar or "💬",
+        online_user_ids=get_online_user_ids(),
+    )
+    if not created:
+        return JSONResponse(status_code=400, content={"error": "Selecciona al menos un contacto válido para crear la sala."})
+
+    member_ids = [m["id"] for m in created["members"]]
+    await notify_groups_for_members(member_ids, group_id=created["id"])
+
+    creator_name = strip_plus_tags(user["nickname"])
+    for mid in member_ids:
+        if mid != user["id"]:
+            schedule_push_to_user(
+                mid,
+                title=f"👥 Nueva sala: {created['name']}",
+                body=f"{creator_name} te agregó a la sala grupal.",
+                url=f"/?group={created['id']}",
+                tag=f"z05-group-{created['id']}",
+                data={"kind": "group_created", "groupId": created["id"]},
+            )
+
+    return JSONResponse(
+        status_code=201,
+        content={"group": created, "groups": get_user_groups_bundle(user["id"], get_online_user_ids())},
+    )
+
+
+@fastapi_app.post("/api/groups/{group_id}/members")
+async def add_members_endpoint(
+    group_id: int,
+    payload: GroupAddMembersPayload,
+    request: Request,
+    user: Optional[dict] = Depends(require_user),
+):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    if not api_limiter.allow(client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "Límite temporal de peticiones alcanzado."})
+
+    res = add_group_members(
+        group_id=group_id,
+        requester_id=user["id"],
+        member_ids=payload.memberIds,
+        online_user_ids=get_online_user_ids(),
+    )
+    if not res:
+        return JSONResponse(status_code=404, content={"error": "Sala no encontrada o sin acceso."})
+
+    member_ids = [m["id"] for m in res["group"]["members"]]
+    await notify_groups_for_members(member_ids, group_id=group_id)
+    return {"group": res["group"], "addedIds": res["addedIds"]}
+
+
+@fastapi_app.post("/api/groups/{group_id}/leave")
+async def leave_group_endpoint(group_id: int, user: Optional[dict] = Depends(require_user)):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    for sid in user_sockets.get(user["id"], set()):
+        await sio.leave_room(sid, f"group:{group_id}")
+    res = leave_chat_group(group_id, user["id"])
+    if not res["left"]:
+        return JSONResponse(status_code=404, content={"error": "No perteneces a esta sala."})
+    await notify_groups_for_members(res["remainingIds"])
+    return {"ok": True, "groups": get_user_groups_bundle(user["id"], get_online_user_ids())}
+
+
+@fastapi_app.get("/api/groups/{group_id}/messages")
+async def list_group_messages(
+    group_id: int,
+    before: Optional[int] = Query(default=None),
+    limit: int = Query(default=30),
+    user: Optional[dict] = Depends(require_user),
+):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    bundle = get_group_messages(group_id, user["id"], before_id=before, limit=limit)
+    if bundle is None:
+        return JSONResponse(status_code=403, content={"error": "No perteneces a esta sala grupal."})
+    return bundle
+
+
+@fastapi_app.post("/api/groups/{group_id}/read")
+async def read_group_endpoint(group_id: int, user: Optional[dict] = Depends(require_user)):
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Sesión no autorizada."})
+    updated = mark_group_read(user["id"], group_id)
+    await emit_to_user(user["id"], "group_read", {"groupId": group_id})
+    return {"ok": True, "updatedCount": updated}
 
 
 # --- WEB PUSH NOTIFICATIONS ---
@@ -854,10 +1014,14 @@ async def connect(sid, environ, auth):
 
     await sio.save_session(sid, {"user_id": uid})
     await sio.enter_room(sid, f"user:{uid}")
+    for gid in get_user_group_ids(uid):
+        await sio.enter_room(sid, f"group:{gid}")
     touch_user_last_seen(uid)
 
-    # Send fresh friend list to newly connected socket
-    await sio.emit("friends_refresh", get_friends_bundle(uid, get_online_user_ids()), to=sid)
+    # Send fresh friend list & groups to newly connected socket
+    online_now = get_online_user_ids()
+    await sio.emit("friends_refresh", get_friends_bundle(uid, online_now), to=sid)
+    await sio.emit("groups_refresh", {"groups": get_user_groups_bundle(uid, online_now)}, to=sid)
 
     if was_offline:
         online_ids = get_online_user_ids()
@@ -933,6 +1097,15 @@ async def send_message(sid, payload):
     if not is_valid_media_data(msg_type, media_data):
         return {"error": "El archivo adjunto excede el tamaño permitido o tiene un formato no soportado."}
 
+    reply_to_id = None
+    if payload.get("replyToId") is not None:
+        try:
+            candidate_reply_id = int(payload.get("replyToId"))
+            if candidate_reply_id > 0:
+                reply_to_id = candidate_reply_id
+        except (TypeError, ValueError):
+            reply_to_id = None
+
     saved = save_message(
         from_user_id=user_id,
         to_user_id=to_user_id,
@@ -943,6 +1116,7 @@ async def send_message(sid, payload):
         is_bold=bool(payload.get("isBold")),
         is_italic=bool(payload.get("isItalic")),
         media_data=media_data,
+        reply_to_id=reply_to_id,
     )
     sender = get_user_by_id(user_id)
     wire = {**saved, "fromUser": sender}
@@ -1108,8 +1282,270 @@ async def mark_read(sid, payload):
         return
     if not friend_id:
         return
-    mark_conversation_read(user_id, friend_id)
+    updated_count = mark_conversation_read(user_id, friend_id)
     await emit_to_user(user_id, "conversation_read", {"friendId": friend_id})
+    if updated_count > 0:
+        await emit_to_user(friend_id, "friend_read_messages", {"byUserId": user_id, "readAt": now_ms()})
+
+
+@sio.event
+async def toggle_reaction(sid, payload):
+    session = await sio.get_session(sid)
+    user_id = session.get("user_id") if session else None
+    if not user_id or not isinstance(payload, dict):
+        return {"error": "Sesión o petición inválida."}
+    if not socket_msg_limiter.allow(f"u:{user_id}"):
+        return {"error": "Demasiadas acciones seguidas. Espera un segundo."}
+
+    scope = payload.get("scope") if payload.get("scope") in ("dm", "group") else "dm"
+    emoji = str(payload.get("emoji") or "")
+    if emoji not in ALLOWED_REACTION_EMOJIS:
+        return {"error": "Reacción no permitida."}
+
+    try:
+        message_id = int(payload.get("messageId") or 0)
+    except (TypeError, ValueError):
+        return {"error": "Mensaje inválido."}
+    if message_id <= 0:
+        return {"error": "Mensaje inválido."}
+
+    res = toggle_message_reaction(scope=scope, message_id=message_id, user_id=user_id, emoji=emoji)
+    if not res:
+        return {"error": "No tienes acceso a este mensaje."}
+
+    event_payload = {
+        "scope": res["scope"],
+        "messageId": res["messageId"],
+        "groupId": res["groupId"],
+        "reactions": res["reactions"],
+    }
+    if res["scope"] == "group" and res["groupId"]:
+        await sio.emit("reaction_updated", event_payload, room=f"group:{res['groupId']}")
+    else:
+        for uid in res["participants"]:
+            await emit_to_user(uid, "reaction_updated", event_payload)
+
+    return {"ok": True, **event_payload}
+
+
+@sio.event
+async def send_group_message(sid, payload):
+    session = await sio.get_session(sid)
+    user_id = session.get("user_id") if session else None
+    if not user_id or not isinstance(payload, dict):
+        return {"error": "Sesión o mensaje inválido."}
+    if not socket_msg_limiter.allow(f"u:{user_id}"):
+        return {"error": "Estás enviando mensajes demasiado rápido. Espera unos segundos."}
+
+    try:
+        group_id = int(payload.get("groupId") or 0)
+    except (TypeError, ValueError):
+        return {"error": "Sala inválida."}
+
+    if not group_id or not is_user_in_group(group_id, user_id):
+        return {"error": "No perteneces a esta sala grupal."}
+
+    msg_type = payload.get("type") if payload.get("type") in ("text", "ink", "image", "voice") else "text"
+    text = payload.get("text") if isinstance(payload.get("text"), str) else ""
+    media_data = payload.get("mediaData") if msg_type != "text" else None
+
+    if msg_type == "text" and not text.strip():
+        return {"error": "El mensaje no puede estar vacío."}
+    if not is_valid_media_data(msg_type, media_data):
+        return {"error": "El archivo adjunto excede el tamaño permitido o tiene un formato no soportado."}
+
+    reply_to_id = None
+    if payload.get("replyToId") is not None:
+        try:
+            candidate_reply_id = int(payload.get("replyToId"))
+            if candidate_reply_id > 0:
+                reply_to_id = candidate_reply_id
+        except (TypeError, ValueError):
+            reply_to_id = None
+
+    saved = save_group_message(
+        group_id=group_id,
+        from_user_id=user_id,
+        msg_type=msg_type,
+        text=text,
+        font=sanitize_chat_font(payload.get("font")),
+        color=sanitize_chat_color(payload.get("color")),
+        is_bold=bool(payload.get("isBold")),
+        is_italic=bool(payload.get("isItalic")),
+        media_data=media_data,
+        reply_to_id=reply_to_id,
+    )
+    if not saved:
+        return {"error": "No se pudo guardar el mensaje grupal."}
+
+    await sio.emit("receive_group_message", saved, room=f"group:{group_id}")
+
+    sender = saved.get("fromUser") or get_user_by_id(user_id)
+    sender_name = strip_plus_tags(sender["nickname"]) if sender else "Contacto"
+    group_name = saved.get("groupName") or "Sala grupal"
+    preview_body = (
+        f"{sender_name}: 📷 Foto"
+        if msg_type == "image"
+        else f"{sender_name}: 🎙️ Clip de voz"
+        if msg_type == "voice"
+        else f"{sender_name}: ✍️ Nota manuscrita"
+        if msg_type == "ink"
+        else f"{sender_name}: {text.strip()[:110]}"
+    )
+    for mid in get_group_member_ids(group_id):
+        if mid != user_id:
+            schedule_push_to_user(
+                mid,
+                title=f"👥 {group_name}",
+                body=preview_body,
+                url=f"/?group={group_id}",
+                tag=f"z05-group-{group_id}",
+                data={"kind": "group_message", "groupId": group_id},
+            )
+    return {"ok": True, "message": saved}
+
+
+@sio.event
+async def send_group_nudge(sid, payload):
+    session = await sio.get_session(sid)
+    user_id = session.get("user_id") if session else None
+    if not user_id or not isinstance(payload, dict):
+        return {"error": "Sesión inválida."}
+
+    try:
+        group_id = int(payload.get("groupId") or 0)
+    except (TypeError, ValueError):
+        return {"error": "Sala inválida."}
+
+    if not group_id or not is_user_in_group(group_id, user_id):
+        return {"error": "No perteneces a esta sala grupal."}
+
+    allowed, retry_ms = check_nudge_cooldown(user_id, -group_id)
+    if not allowed:
+        secs = max(1, math.ceil(retry_ms / 1000))
+        msg = f"No puedes enviar un zumbido con tanta frecuencia. Espera {secs}s."
+        await sio.emit(
+            "nudge_cooldown",
+            {"groupId": group_id, "retryAfterMs": retry_ms, "message": msg},
+            to=sid,
+        )
+        return {"error": msg, "cooldown": True, "retryAfterMs": retry_ms}
+
+    saved = save_group_message(
+        group_id=group_id,
+        from_user_id=user_id,
+        msg_type="nudge",
+        text="¡Envió un zumbido a la sala!",
+    )
+    if not saved:
+        return {"error": "No se pudo enviar el zumbido."}
+
+    await sio.emit("receive_group_nudge", saved, room=f"group:{group_id}")
+
+    sender = saved.get("fromUser") or get_user_by_id(user_id)
+    sender_name = strip_plus_tags(sender["nickname"]) if sender else "Contacto"
+    group_name = saved.get("groupName") or "Sala grupal"
+    for mid in get_group_member_ids(group_id):
+        if mid != user_id:
+            schedule_push_to_user(
+                mid,
+                title=f"⚡ ¡Zumbido en {group_name}!",
+                body=f"{sender_name} envió un zumbido al grupo.",
+                url=f"/?group={group_id}",
+                tag=f"z05-group-nudge-{group_id}",
+                vibrate=[220, 90, 220, 90, 320],
+                data={"kind": "group_nudge", "groupId": group_id},
+            )
+    return {"ok": True, "message": saved}
+
+
+@sio.event
+async def send_group_wink(sid, payload):
+    session = await sio.get_session(sid)
+    user_id = session.get("user_id") if session else None
+    if not user_id or not isinstance(payload, dict):
+        return {"error": "Sesión inválida."}
+    if not socket_msg_limiter.allow(f"u:{user_id}"):
+        return {"error": "Demasiadas acciones en poco tiempo. Espera unos segundos."}
+
+    try:
+        group_id = int(payload.get("groupId") or 0)
+    except (TypeError, ValueError):
+        return {"error": "Sala inválida."}
+
+    wink_id = str(payload.get("winkId") or "laugh")
+    if not group_id or not is_valid_media_data("wink", wink_id) or not is_user_in_group(group_id, user_id):
+        return {"error": "No se pudo enviar el guiño a la sala."}
+
+    saved = save_group_message(
+        group_id=group_id,
+        from_user_id=user_id,
+        msg_type="wink",
+        text=wink_id,
+        media_data=wink_id,
+    )
+    if not saved:
+        return {"error": "No se pudo enviar el guiño."}
+
+    wire = {**saved, "winkId": wink_id}
+    await sio.emit("receive_group_wink", wire, room=f"group:{group_id}")
+
+    sender = saved.get("fromUser") or get_user_by_id(user_id)
+    sender_name = strip_plus_tags(sender["nickname"]) if sender else "Contacto"
+    group_name = saved.get("groupName") or "Sala grupal"
+    for mid in get_group_member_ids(group_id):
+        if mid != user_id:
+            schedule_push_to_user(
+                mid,
+                title=f"✨ {group_name}",
+                body=f"{sender_name} envió un guiño animado a la sala.",
+                url=f"/?group={group_id}",
+                tag=f"z05-group-{group_id}",
+                data={"kind": "group_wink", "groupId": group_id},
+            )
+    return {"ok": True, "message": wire}
+
+
+@sio.event
+async def group_typing_status(sid, payload):
+    session = await sio.get_session(sid)
+    user_id = session.get("user_id") if session else None
+    if not user_id or not isinstance(payload, dict):
+        return
+    try:
+        group_id = int(payload.get("groupId") or 0)
+    except (TypeError, ValueError):
+        return
+    if not group_id or not is_user_in_group(group_id, user_id):
+        return
+    sender = get_user_by_id(user_id)
+    await sio.emit(
+        "group_typing",
+        {
+            "groupId": group_id,
+            "fromUserId": user_id,
+            "nickname": sender["nickname"] if sender else "Contacto",
+            "isTyping": bool(payload.get("isTyping")),
+        },
+        room=f"group:{group_id}",
+        skip_sid=sid,
+    )
+
+
+@sio.on("mark_group_read")
+async def sio_mark_group_read(sid, payload):
+    session = await sio.get_session(sid)
+    user_id = session.get("user_id") if session else None
+    if not user_id or not isinstance(payload, dict):
+        return
+    try:
+        group_id = int(payload.get("groupId") or 0)
+    except (TypeError, ValueError):
+        return
+    if not group_id or not is_user_in_group(group_id, user_id):
+        return
+    mark_group_read(user_id, group_id)
+    await emit_to_user(user_id, "group_read", {"groupId": group_id})
 
 
 # ========================

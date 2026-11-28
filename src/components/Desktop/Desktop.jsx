@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import ZumbidoLogo from '../Common/ZumbidoLogo';
 import { AvatarView } from '../../services/avatars';
-import { playToasterSound, setSoundMuted } from '../../services/soundEngine';
+import { playToasterSound, setSoundMuted, isSoundMuted } from '../../services/soundEngine';
 import { stripPlusTags } from '../../services/plusFormatter';
 
 export default function Desktop({
@@ -11,6 +11,7 @@ export default function Desktop({
   onRestoreWindow,
   onFocusWindow,
   onOpenAbout,
+  onOpenPlayer,
   onLogout,
   isLoggedIn,
   userProfile,
@@ -27,7 +28,7 @@ export default function Desktop({
 }) {
   const [currentTime, setCurrentTime] = useState('');
   const [showClassicMenu, setShowClassicMenu] = useState(false);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(() => isSoundMuted());
 
   useEffect(() => {
     const updateClock = () => {
@@ -97,7 +98,7 @@ export default function Desktop({
           <div className="c05-shortcut-label">Mi Equipo</div>
         </div>
 
-        <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenAbout?.()}>
+        <div className="c05-desktop-shortcut" onDoubleClick={() => onOpenPlayer?.()} title="Abrir Reproductor 05">
           <div className="c05-shortcut-icon">🎵</div>
           <div className="c05-shortcut-label">Reproductor 05</div>
         </div>
@@ -230,11 +231,17 @@ export default function Desktop({
                   <div style={{ fontSize: 10, color: '#666' }}>Desarrollo web & apps</div>
                 </div>
               </a>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', color: '#444' }}>
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', color: '#0b3474', cursor: 'pointer', borderRadius: 3 }}
+                onClick={() => {
+                  setShowClassicMenu(false);
+                  onOpenPlayer?.();
+                }}
+              >
                 <span style={{ fontSize: 20 }}>🎵</span>
                 <div>
-                  <strong style={{ fontSize: 11 }}>Reproductor 05</strong>
-                  <div style={{ fontSize: 10, color: '#777' }}>Música y audio</div>
+                  <strong style={{ fontSize: 11, color: '#000' }}>Reproductor 05</strong>
+                  <div style={{ fontSize: 10, color: '#666' }}>Música y estado (8)</div>
                 </div>
               </div>
             </div>

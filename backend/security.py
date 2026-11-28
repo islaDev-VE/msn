@@ -21,6 +21,8 @@ AUDIO_DATA_URL_RE = re.compile(
     re.IGNORECASE,
 )
 WINK_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{2,24}$")
+ALLOWED_WINKS = {"laugh", "water", "kiss", "knock", "hearts", "party", "lightning", "clap"}
+ALLOWED_REACTION_EMOJIS = {"❤️", "😂", "👍", "😮", "🔥", "😢"}
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,6}$")
 SAFE_FONT_RE = re.compile(r"^[a-zA-Z0-9 ,'-]{1,64}$")
 
@@ -99,7 +101,7 @@ def is_valid_media_data(msg_type: str, media_data: Optional[str]) -> bool:
     if msg_type == "voice":
         return bool(AUDIO_DATA_URL_RE.match(media_data))
     if msg_type == "wink":
-        return bool(WINK_ID_RE.match(media_data))
+        return bool(WINK_ID_RE.match(media_data)) and media_data in ALLOWED_WINKS
     return False
 
 

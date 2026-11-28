@@ -17,7 +17,9 @@ from sqlalchemy import (
     create_engine,
     event,
     func,
+    inspect,
     or_,
+    text as sql_text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -80,7 +82,68 @@ class Message(Base):
     is_bold: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_italic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     media_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    reply_to_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
+
+
+class MessageReaction(Base):
+    __tablename__ = "message_reactions"
+    __table_args__ = (
+        UniqueConstraint("scope", "message_id", "user_id", "emoji", name="uq_reaction_unique"),
+        Index("idx_reactions_lookup", "scope", "message_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String(10), nullable=False, default="dm")  # dm | group
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    emoji: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
+
+
+class ChatGroup(Base):
+    __tablename__ = "chat_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    avatar: Mapped[str] = mapped_column(String(24), nullable=False, default="💬")
+    creator_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
+
+
+class ChatGroupMember(Base):
+    __tablename__ = "chat_group_members"
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_group_member"),
+        Index("idx_group_members_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, ForeignKey("chat_groups.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="member")  # admin | member
+    last_read_msg_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    joined_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
+
+
+class GroupMessage(Base):
+    __tablename__ = "group_messages"
+    __table_args__ = (
+        Index("idx_group_messages_group_id", "group_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, ForeignKey("chat_groups.id", ondelete="CASCADE"), nullable=False)
+    from_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    font: Mapped[str] = mapped_column(String(80), nullable=False, default="Tahoma")
+    color: Mapped[str] = mapped_column(String(30), nullable=False, default="#000000")
+    is_bold: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_italic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    media_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    reply_to_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
 
 
@@ -142,6 +205,13 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Safe idempotent migration for existing SQLite/SQL databases
+    inspector = inspect(engine)
+    if "messages" in inspector.get_table_names():
+        msg_cols = {col["name"] for col in inspector.get_columns("messages")}
+        if "reply_to_id" not in msg_cols:
+            with engine.begin() as conn:
+                conn.execute(sql_text("ALTER TABLE messages ADD COLUMN reply_to_id INTEGER"))
 
 
 def get_session() -> Session:
@@ -163,7 +233,11 @@ def sanitize_user(user: Optional[User]) -> Optional[dict]:
     }
 
 
-def format_message(msg: Optional[Message]) -> Optional[dict]:
+def format_message(
+    msg: Optional[Message],
+    reactions: Optional[list[dict]] = None,
+    reply_to: Optional[dict] = None,
+) -> Optional[dict]:
     if not msg:
         return None
     return {
@@ -177,6 +251,9 @@ def format_message(msg: Optional[Message]) -> Optional[dict]:
         "isBold": bool(msg.is_bold),
         "isItalic": bool(msg.is_italic),
         "mediaData": msg.media_data,
+        "replyToId": msg.reply_to_id,
+        "replyTo": reply_to,
+        "reactions": reactions or [],
         "isRead": bool(msg.is_read),
         "timestamp": msg.created_at,
     }
@@ -495,6 +572,66 @@ def get_friends_bundle(user_id: int, online_user_ids: set[int]) -> dict:
         }
 
 
+# --- REACTION & REPLY HELPERS ---
+
+def _get_reactions_map(db: Session, scope: str, message_ids: list[int]) -> dict[int, list[dict]]:
+    if not message_ids:
+        return {}
+    rows = (
+        db.query(MessageReaction)
+        .filter(MessageReaction.scope == scope, MessageReaction.message_id.in_(message_ids))
+        .order_by(MessageReaction.id.asc())
+        .all()
+    )
+    grouped: dict[int, dict[str, list[int]]] = {}
+    for r in rows:
+        by_emoji = grouped.setdefault(r.message_id, {})
+        by_emoji.setdefault(r.emoji, []).append(r.user_id)
+
+    result: dict[int, list[dict]] = {}
+    for mid, by_emoji in grouped.items():
+        result[mid] = [
+            {"emoji": em, "count": len(uids), "userIds": uids}
+            for em, uids in by_emoji.items()
+        ]
+    return result
+
+
+def _summarize_reply_row(row, sender_nick: str) -> dict:
+    preview = (
+        "📷 Foto"
+        if row.type == "image"
+        else "🎙️ Clip de voz"
+        if row.type == "voice"
+        else "✍️ Tinta manuscrita"
+        if row.type == "ink"
+        else "⚡ Zumbido"
+        if row.type == "nudge"
+        else f"✨ Guiño ({row.text})"
+        if row.type == "wink"
+        else (row.text or "")[:120]
+    )
+    return {
+        "id": row.id,
+        "fromUserId": row.from_user_id,
+        "nickname": sender_nick,
+        "type": row.type,
+        "text": preview,
+    }
+
+
+def _get_dm_reply_map(db: Session, rows: list[Message]) -> dict[int, dict]:
+    reply_ids = list({m.reply_to_id for m in rows if m.reply_to_id})
+    if not reply_ids:
+        return {}
+    targets = db.query(Message).filter(Message.id.in_(reply_ids)).all()
+    if not targets:
+        return {}
+    user_ids = list({t.from_user_id for t in targets})
+    users = {u.id: u.nickname for u in db.query(User).filter(User.id.in_(user_ids)).all()}
+    return {t.id: _summarize_reply_row(t, users.get(t.from_user_id, "Contacto")) for t in targets}
+
+
 # --- MESSAGE QUERIES ---
 
 def save_message(
@@ -507,11 +644,34 @@ def save_message(
     is_bold: bool = False,
     is_italic: bool = False,
     media_data: Optional[str] = None,
+    reply_to_id: Optional[int] = None,
 ) -> dict:
+    uid, fid = int(from_user_id), int(to_user_id)
     with get_session() as db:
+        valid_reply_id = None
+        reply_preview = None
+        if reply_to_id is not None:
+            target = (
+                db.query(Message)
+                .filter(
+                    Message.id == int(reply_to_id),
+                    or_(
+                        and_(Message.from_user_id == uid, Message.to_user_id == fid),
+                        and_(Message.from_user_id == fid, Message.to_user_id == uid),
+                    ),
+                )
+                .first()
+            )
+            if target:
+                valid_reply_id = target.id
+                sender_user = db.get(User, target.from_user_id)
+                reply_preview = _summarize_reply_row(
+                    target, sender_user.nickname if sender_user else "Contacto"
+                )
+
         msg = Message(
-            from_user_id=int(from_user_id),
-            to_user_id=int(to_user_id),
+            from_user_id=uid,
+            to_user_id=fid,
             type=msg_type,
             text=str(text or "")[:4000],
             font=str(font or "Tahoma")[:80],
@@ -519,13 +679,14 @@ def save_message(
             is_bold=bool(is_bold),
             is_italic=bool(is_italic),
             media_data=media_data,
+            reply_to_id=valid_reply_id,
             is_read=False,
             created_at=now_ms(),
         )
         db.add(msg)
         db.commit()
         db.refresh(msg)
-        return format_message(msg)
+        return format_message(msg, reactions=[], reply_to=reply_preview)
 
 
 def get_conversation_messages(
@@ -552,8 +713,19 @@ def get_conversation_messages(
         page = rows[:safe_limit] if has_more else rows
         page.reverse()
 
+        msg_ids = [m.id for m in page]
+        reactions_map = _get_reactions_map(db, "dm", msg_ids)
+        reply_map = _get_dm_reply_map(db, page)
+
         return {
-            "messages": [format_message(m) for m in page],
+            "messages": [
+                format_message(
+                    m,
+                    reactions=reactions_map.get(m.id, []),
+                    reply_to=reply_map.get(m.reply_to_id) if m.reply_to_id else None,
+                )
+                for m in page
+            ],
             "hasMore": has_more,
         }
 
@@ -882,6 +1054,501 @@ def get_user_pending_badge_count(user_id: int) -> int:
             .scalar()
             or 0
         )
-        return int(unread_msgs) + int(pending_reqs)
+        group_memberships = (
+            db.query(ChatGroupMember)
+            .filter(ChatGroupMember.user_id == uid)
+            .all()
+        )
+        unread_group = 0
+        for gm in group_memberships:
+            unread_group += int(
+                db.query(func.count(GroupMessage.id))
+                .filter(
+                    GroupMessage.group_id == gm.group_id,
+                    GroupMessage.id > int(gm.last_read_msg_id or 0),
+                    GroupMessage.from_user_id != uid,
+                )
+                .scalar()
+                or 0
+            )
+        return int(unread_msgs) + int(pending_reqs) + unread_group
+
+
+# --- REACTION QUERIES ---
+
+def toggle_message_reaction(scope: str, message_id: int, user_id: int, emoji: str) -> Optional[dict]:
+    clean_scope = "group" if scope == "group" else "dm"
+    mid = int(message_id)
+    uid = int(user_id)
+
+    with get_session() as db:
+        participants: list[int] = []
+        group_id: Optional[int] = None
+
+        if clean_scope == "dm":
+            msg = db.get(Message, mid)
+            if not msg or uid not in (msg.from_user_id, msg.to_user_id):
+                return None
+            participants = [msg.from_user_id, msg.to_user_id]
+        else:
+            gmsg = db.get(GroupMessage, mid)
+            if not gmsg:
+                return None
+            is_member = (
+                db.query(ChatGroupMember)
+                .filter(ChatGroupMember.group_id == gmsg.group_id, ChatGroupMember.user_id == uid)
+                .first()
+            )
+            if not is_member:
+                return None
+            group_id = gmsg.group_id
+
+        existing = (
+            db.query(MessageReaction)
+            .filter(
+                MessageReaction.scope == clean_scope,
+                MessageReaction.message_id == mid,
+                MessageReaction.user_id == uid,
+                MessageReaction.emoji == emoji,
+            )
+            .first()
+        )
+        if existing:
+            db.delete(existing)
+        else:
+            db.add(
+                MessageReaction(
+                    scope=clean_scope,
+                    message_id=mid,
+                    user_id=uid,
+                    emoji=emoji,
+                    created_at=now_ms(),
+                )
+            )
+        db.commit()
+
+        reactions_map = _get_reactions_map(db, clean_scope, [mid])
+        return {
+            "scope": clean_scope,
+            "messageId": mid,
+            "groupId": group_id,
+            "participants": participants,
+            "reactions": reactions_map.get(mid, []),
+        }
+
+
+# --- GROUP CHAT QUERIES ---
+
+def _format_group_message(
+    msg: GroupMessage,
+    sender: Optional[dict],
+    reactions: Optional[list[dict]] = None,
+    reply_to: Optional[dict] = None,
+) -> dict:
+    return {
+        "id": msg.id,
+        "groupId": msg.group_id,
+        "fromUserId": msg.from_user_id,
+        "fromUser": sender,
+        "type": msg.type,
+        "text": msg.text,
+        "font": msg.font,
+        "color": msg.color,
+        "isBold": bool(msg.is_bold),
+        "isItalic": bool(msg.is_italic),
+        "mediaData": msg.media_data,
+        "replyToId": msg.reply_to_id,
+        "replyTo": reply_to,
+        "reactions": reactions or [],
+        "timestamp": msg.created_at,
+    }
+
+
+def _build_group_dict(db: Session, group: ChatGroup, viewer_id: int, online_user_ids: set[int]) -> dict:
+    rows = (
+        db.query(ChatGroupMember, User)
+        .join(User, User.id == ChatGroupMember.user_id)
+        .filter(ChatGroupMember.group_id == group.id)
+        .order_by(func.lower(User.nickname))
+        .all()
+    )
+    members = []
+    viewer_last_read = 0
+    for gm, u in rows:
+        if gm.user_id == viewer_id:
+            viewer_last_read = int(gm.last_read_msg_id or 0)
+        is_online = (u.id in online_user_ids) and (u.status != "offline")
+        members.append(
+            {
+                "id": u.id,
+                "nickname": u.nickname,
+                "avatar": u.avatar or "bubbles",
+                "status": u.status if is_online else "offline",
+                "isOnline": is_online,
+                "role": gm.role,
+            }
+        )
+
+    unread_count = int(
+        db.query(func.count(GroupMessage.id))
+        .filter(
+            GroupMessage.group_id == group.id,
+            GroupMessage.id > viewer_last_read,
+            GroupMessage.from_user_id != viewer_id,
+        )
+        .scalar()
+        or 0
+    )
+
+    last_msg = (
+        db.query(GroupMessage)
+        .filter(GroupMessage.group_id == group.id)
+        .order_by(GroupMessage.id.desc())
+        .first()
+    )
+
+    return {
+        "id": group.id,
+        "name": group.name,
+        "avatar": group.avatar or "💬",
+        "creatorId": group.creator_id,
+        "members": members,
+        "unreadCount": unread_count,
+        "lastTimestamp": last_msg.created_at if last_msg else group.created_at,
+        "createdAt": group.created_at,
+    }
+
+
+def get_user_group_ids(user_id: int) -> list[int]:
+    with get_session() as db:
+        rows = (
+            db.query(ChatGroupMember.group_id)
+            .filter(ChatGroupMember.user_id == int(user_id))
+            .all()
+        )
+        return [r[0] for r in rows]
+
+
+def get_group_member_ids(group_id: int) -> list[int]:
+    with get_session() as db:
+        rows = (
+            db.query(ChatGroupMember.user_id)
+            .filter(ChatGroupMember.group_id == int(group_id))
+            .all()
+        )
+        return [r[0] for r in rows]
+
+
+def is_user_in_group(group_id: int, user_id: int) -> bool:
+    with get_session() as db:
+        row = (
+            db.query(ChatGroupMember.id)
+            .filter(ChatGroupMember.group_id == int(group_id), ChatGroupMember.user_id == int(user_id))
+            .first()
+        )
+        return row is not None
+
+
+def get_user_groups_bundle(user_id: int, online_user_ids: set[int]) -> list[dict]:
+    uid = int(user_id)
+    with get_session() as db:
+        groups = (
+            db.query(ChatGroup)
+            .join(ChatGroupMember, ChatGroupMember.group_id == ChatGroup.id)
+            .filter(ChatGroupMember.user_id == uid)
+            .order_by(ChatGroup.created_at.desc())
+            .all()
+        )
+        bundle = [_build_group_dict(db, g, uid, online_user_ids) for g in groups]
+        bundle.sort(key=lambda g: g["lastTimestamp"], reverse=True)
+        return bundle
+
+
+def create_chat_group(
+    creator_id: int,
+    name: str,
+    member_ids: list[int],
+    avatar: str = "💬",
+    online_user_ids: Optional[set[int]] = None,
+) -> Optional[dict]:
+    cid = int(creator_id)
+    clean_name = (name or "").strip()[:60]
+    if not clean_name:
+        return None
+    clean_avatar = (avatar or "💬").strip()[:24] or "💬"
+    online_set = online_user_ids or set()
+
+    with get_session() as db:
+        accepted_ids = {
+            r[0]
+            for r in db.query(Friendship.friend_id)
+            .filter(Friendship.user_id == cid, Friendship.status == "accepted")
+            .all()
+        }
+        valid_members = []
+        for mid in member_ids:
+            try:
+                m_int = int(mid)
+            except (TypeError, ValueError):
+                continue
+            if m_int != cid and m_int in accepted_ids and not is_blocked_between(cid, m_int):
+                if m_int not in valid_members:
+                    valid_members.append(m_int)
+
+        if len(valid_members) < 1:
+            return None
+
+        ts = now_ms()
+        group = ChatGroup(name=clean_name, avatar=clean_avatar, creator_id=cid, created_at=ts)
+        db.add(group)
+        db.flush()
+
+        db.add(
+            ChatGroupMember(
+                group_id=group.id,
+                user_id=cid,
+                role="admin",
+                last_read_msg_id=0,
+                joined_at=ts,
+            )
+        )
+        for mid in valid_members[:24]:
+            db.add(
+                ChatGroupMember(
+                    group_id=group.id,
+                    user_id=mid,
+                    role="member",
+                    last_read_msg_id=0,
+                    joined_at=ts,
+                )
+            )
+        db.commit()
+        db.refresh(group)
+        return _build_group_dict(db, group, cid, online_set)
+
+
+def add_group_members(
+    group_id: int,
+    requester_id: int,
+    member_ids: list[int],
+    online_user_ids: Optional[set[int]] = None,
+) -> Optional[dict]:
+    gid, rid = int(group_id), int(requester_id)
+    online_set = online_user_ids or set()
+    with get_session() as db:
+        group = db.get(ChatGroup, gid)
+        if not group:
+            return None
+        is_member = (
+            db.query(ChatGroupMember)
+            .filter(ChatGroupMember.group_id == gid, ChatGroupMember.user_id == rid)
+            .first()
+        )
+        if not is_member:
+            return None
+
+        existing_ids = {
+            r[0]
+            for r in db.query(ChatGroupMember.user_id)
+            .filter(ChatGroupMember.group_id == gid)
+            .all()
+        }
+        accepted_ids = {
+            r[0]
+            for r in db.query(Friendship.friend_id)
+            .filter(Friendship.user_id == rid, Friendship.status == "accepted")
+            .all()
+        }
+        added: list[int] = []
+        ts = now_ms()
+        for mid in member_ids:
+            try:
+                m_int = int(mid)
+            except (TypeError, ValueError):
+                continue
+            if (
+                m_int not in existing_ids
+                and m_int in accepted_ids
+                and not is_blocked_between(rid, m_int)
+                and len(existing_ids) + len(added) < 25
+            ):
+                db.add(
+                    ChatGroupMember(
+                        group_id=gid,
+                        user_id=m_int,
+                        role="member",
+                        last_read_msg_id=0,
+                        joined_at=ts,
+                    )
+                )
+                added.append(m_int)
+        db.commit()
+        return {"group": _build_group_dict(db, group, rid, online_set), "addedIds": added}
+
+
+def leave_chat_group(group_id: int, user_id: int) -> dict:
+    gid, uid = int(group_id), int(user_id)
+    with get_session() as db:
+        deleted = (
+            db.query(ChatGroupMember)
+            .filter(ChatGroupMember.group_id == gid, ChatGroupMember.user_id == uid)
+            .delete(synchronize_session=False)
+        )
+        remaining = (
+            db.query(ChatGroupMember.user_id)
+            .filter(ChatGroupMember.group_id == gid)
+            .all()
+        )
+        if len(remaining) == 0:
+            db.query(ChatGroup).filter(ChatGroup.id == gid).delete(synchronize_session=False)
+        db.commit()
+        return {"left": deleted > 0, "remainingIds": [r[0] for r in remaining]}
+
+
+def save_group_message(
+    group_id: int,
+    from_user_id: int,
+    msg_type: str = "text",
+    text: str = "",
+    font: str = "Tahoma",
+    color: str = "#000000",
+    is_bold: bool = False,
+    is_italic: bool = False,
+    media_data: Optional[str] = None,
+    reply_to_id: Optional[int] = None,
+) -> Optional[dict]:
+    gid, uid = int(group_id), int(from_user_id)
+    with get_session() as db:
+        member = (
+            db.query(ChatGroupMember)
+            .filter(ChatGroupMember.group_id == gid, ChatGroupMember.user_id == uid)
+            .first()
+        )
+        if not member:
+            return None
+
+        valid_reply_id = None
+        reply_preview = None
+        if reply_to_id is not None:
+            target = (
+                db.query(GroupMessage)
+                .filter(GroupMessage.id == int(reply_to_id), GroupMessage.group_id == gid)
+                .first()
+            )
+            if target:
+                valid_reply_id = target.id
+                reply_user = db.get(User, target.from_user_id)
+                reply_preview = _summarize_reply_row(
+                    target, reply_user.nickname if reply_user else "Contacto"
+                )
+
+        msg = GroupMessage(
+            group_id=gid,
+            from_user_id=uid,
+            type=msg_type,
+            text=str(text or "")[:4000],
+            font=str(font or "Tahoma")[:80],
+            color=str(color or "#000000")[:30],
+            is_bold=bool(is_bold),
+            is_italic=bool(is_italic),
+            media_data=media_data,
+            reply_to_id=valid_reply_id,
+            created_at=now_ms(),
+        )
+        db.add(msg)
+        db.flush()
+        member.last_read_msg_id = max(int(member.last_read_msg_id or 0), msg.id)
+        db.commit()
+        db.refresh(msg)
+        sender = sanitize_user(db.get(User, uid))
+        return _format_group_message(msg, sender=sender, reactions=[], reply_to=reply_preview)
+
+
+def get_group_messages(
+    group_id: int,
+    user_id: int,
+    before_id: Optional[int] = None,
+    limit: int = 30,
+) -> Optional[dict]:
+    gid, uid = int(group_id), int(user_id)
+    safe_limit = min(max(int(limit or 30), 1), 100)
+
+    with get_session() as db:
+        is_member = (
+            db.query(ChatGroupMember.id)
+            .filter(ChatGroupMember.group_id == gid, ChatGroupMember.user_id == uid)
+            .first()
+        )
+        if not is_member:
+            return None
+
+        q = db.query(GroupMessage).filter(GroupMessage.group_id == gid)
+        if before_id is not None:
+            q = q.filter(GroupMessage.id < int(before_id))
+
+        rows = q.order_by(GroupMessage.id.desc()).limit(safe_limit + 1).all()
+        has_more = len(rows) > safe_limit
+        page = rows[:safe_limit] if has_more else rows
+        page.reverse()
+
+        sender_ids = list({m.from_user_id for m in page})
+        users_map = {
+            u.id: sanitize_user(u)
+            for u in db.query(User).filter(User.id.in_(sender_ids)).all()
+        } if sender_ids else {}
+
+        msg_ids = [m.id for m in page]
+        reactions_map = _get_reactions_map(db, "group", msg_ids)
+
+        reply_ids = list({m.reply_to_id for m in page if m.reply_to_id})
+        reply_map: dict[int, dict] = {}
+        if reply_ids:
+            targets = db.query(GroupMessage).filter(GroupMessage.id.in_(reply_ids)).all()
+            r_uids = list({t.from_user_id for t in targets})
+            r_nicks = {
+                u.id: u.nickname
+                for u in db.query(User).filter(User.id.in_(r_uids)).all()
+            } if r_uids else {}
+            reply_map = {
+                t.id: _summarize_reply_row(t, r_nicks.get(t.from_user_id, "Contacto"))
+                for t in targets
+            }
+
+        return {
+            "messages": [
+                _format_group_message(
+                    m,
+                    sender=users_map.get(m.from_user_id),
+                    reactions=reactions_map.get(m.id, []),
+                    reply_to=reply_map.get(m.reply_to_id) if m.reply_to_id else None,
+                )
+                for m in page
+            ],
+            "hasMore": has_more,
+        }
+
+
+def mark_group_read(user_id: int, group_id: int) -> int:
+    uid, gid = int(user_id), int(group_id)
+    with get_session() as db:
+        member = (
+            db.query(ChatGroupMember)
+            .filter(ChatGroupMember.group_id == gid, ChatGroupMember.user_id == uid)
+            .first()
+        )
+        if not member:
+            return 0
+        latest_id = (
+            db.query(func.max(GroupMessage.id))
+            .filter(GroupMessage.group_id == gid)
+            .scalar()
+            or 0
+        )
+        prev_id = int(member.last_read_msg_id or 0)
+        if latest_id > prev_id:
+            member.last_read_msg_id = int(latest_id)
+            db.commit()
+            return int(latest_id) - prev_id
+        return 0
 
 

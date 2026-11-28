@@ -66,9 +66,77 @@ export function stripPlusTags(text) {
  * Renders text supporting Colores Plus tags ([c=#hex], [c=4], [b], [i], [u]) + classic emoticons.
  * Safe React element output (zero dangerouslySetInnerHTML).
  */
-export function renderFormattedText(input, keyPrefix = 'fmt') {
+function renderTextChunksWithEmoticons(text, keyBase) {
+  const chunks = parseTextWithEmoticons(text);
+  return chunks.map((chunk, cIdx) => {
+    if (chunk.type === 'emoticon') {
+      return (
+        <span
+          key={`${keyBase}-e-${cIdx}`}
+          style={{ fontSize: '1.15em', verticalAlign: 'middle', margin: '0 1px' }}
+          title={`${chunk.data.name} (${chunk.data.code})`}
+        >
+          {chunk.data.render}
+        </span>
+      );
+    }
+    return <React.Fragment key={`${keyBase}-t-${cIdx}`}>{chunk.value}</React.Fragment>;
+  });
+}
+
+function renderSegmentWithOptionalLinks(text, enableLinks, keyBase) {
+  if (!enableLinks || !text) {
+    return renderTextChunksWithEmoticons(text, keyBase);
+  }
+  const urlRegex = /(https?:\/\/[^\s<>"']+)/gi;
+  const segments = text.split(urlRegex);
+  if (segments.length === 1) {
+    return renderTextChunksWithEmoticons(text, keyBase);
+  }
+
+  return segments.map((seg, sIdx) => {
+    if (!seg) return null;
+    if (/^https?:\/\//i.test(seg)) {
+      let cleanUrl = seg;
+      let trailing = '';
+      while (/[.,;:!?)]$/.test(cleanUrl) && (cleanUrl.slice(-1) !== ')' || (cleanUrl.match(/\(/g) || []).length < (cleanUrl.match(/\)/g) || []).length)) {
+        trailing = cleanUrl.slice(-1) + trailing;
+        cleanUrl = cleanUrl.slice(0, -1);
+      }
+      try {
+        const parsed = new URL(cleanUrl);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          return (
+            <React.Fragment key={`${keyBase}-u-${sIdx}`}>
+              <a
+                href={parsed.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="z05-chat-link"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {cleanUrl}
+              </a>
+              {trailing}
+            </React.Fragment>
+          );
+        }
+      } catch {
+        // Fallback to plain text if URL parsing fails
+      }
+    }
+    return (
+      <React.Fragment key={`${keyBase}-s-${sIdx}`}>
+        {renderTextChunksWithEmoticons(seg, `${keyBase}-s-${sIdx}`)}
+      </React.Fragment>
+    );
+  });
+}
+
+export function renderFormattedText(input, keyPrefix = 'fmt', options = {}) {
   if (!input) return null;
   const str = String(input);
+  const enableLinks = Boolean(options?.enableLinks);
   const tokenRegex = /(\[c=[^\]]+\]|\[\/c\]|\[b\]|\[\/b\]|\[i\]|\[\/i\]|\[u\]|\[\/u\])/gi;
   const parts = str.split(tokenRegex);
 
@@ -104,21 +172,7 @@ export function renderFormattedText(input, keyPrefix = 'fmt') {
     if (italic > 0) style.fontStyle = 'italic';
     if (underline > 0) style.textDecoration = 'underline';
 
-    const chunks = parseTextWithEmoticons(part);
-    const renderedChunks = chunks.map((chunk, cIdx) => {
-      if (chunk.type === 'emoticon') {
-        return (
-          <span
-            key={`${keyPrefix}-${idx}-e-${cIdx}`}
-            style={{ fontSize: '1.15em', verticalAlign: 'middle', margin: '0 1px' }}
-            title={`${chunk.data.name} (${chunk.data.code})`}
-          >
-            {chunk.data.render}
-          </span>
-        );
-      }
-      return <React.Fragment key={`${keyPrefix}-${idx}-t-${cIdx}`}>{chunk.value}</React.Fragment>;
-    });
+    const renderedChunks = renderSegmentWithOptionalLinks(part, enableLinks, `${keyPrefix}-${idx}`);
 
     if (Object.keys(style).length > 0) {
       nodes.push(

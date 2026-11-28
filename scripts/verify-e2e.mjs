@@ -442,6 +442,188 @@ try {
   assert.equal(rejectAccepted.status, 404);
   console.log('✓ 10. Security hardening (SSRF, CSP, invisible nick, empty media, blocked invite, pending reject) OK');
 
+  // 11. DM Read Receipts (friend_read_messages), Replies/Quotes, Emoji Reactions & New Winks
+  const dmSentAck = await emitAck(anaSocket, 'send_message', {
+    toUserId: luisId,
+    type: 'text',
+    text: 'Mensaje original para citar https://isladev.com'
+  });
+  assert.equal(dmSentAck.ok, true);
+  const origMsgId = dmSentAck.message.id;
+
+  const friendReadPromise = new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('Timeout friend_read_messages')), 3000);
+    anaSocket.once('friend_read_messages', (ev) => {
+      clearTimeout(t);
+      resolve(ev);
+    });
+  });
+  luisSocket.emit('mark_read', { friendId: anaId });
+  const friendReadEv = await friendReadPromise;
+  assert.equal(friendReadEv.byUserId, luisId);
+
+  const replyAck = await emitAck(luisSocket, 'send_message', {
+    toUserId: anaId,
+    type: 'text',
+    text: 'Respuesta citada!',
+    replyToId: origMsgId
+  });
+  assert.equal(replyAck.ok, true);
+  assert.equal(replyAck.message.replyTo.id, origMsgId);
+  assert.ok(replyAck.message.replyTo.text.includes('Mensaje original'));
+
+  const reactionPromise = new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('Timeout reaction_updated')), 3000);
+    anaSocket.once('reaction_updated', (ev) => {
+      clearTimeout(t);
+      resolve(ev);
+    });
+  });
+  const reactAck = await emitAck(luisSocket, 'toggle_reaction', {
+    scope: 'dm',
+    messageId: origMsgId,
+    emoji: '❤️'
+  });
+  assert.equal(reactAck.ok, true);
+  const reactEv = await reactionPromise;
+  assert.equal(reactEv.messageId, origMsgId);
+  assert.equal(reactEv.reactions[0].emoji, '❤️');
+  assert.equal(reactEv.reactions[0].count, 1);
+
+  // Toggle off & invalid emoji rejection
+  const reactOff = await emitAck(luisSocket, 'toggle_reaction', {
+    scope: 'dm',
+    messageId: origMsgId,
+    emoji: '❤️'
+  });
+  assert.equal(reactOff.reactions.length, 0);
+  const badReact = await emitAck(luisSocket, 'toggle_reaction', {
+    scope: 'dm',
+    messageId: origMsgId,
+    emoji: '💀'
+  });
+  assert.ok(badReact.error);
+
+  const newWinkAck = await emitAck(anaSocket, 'send_wink', {
+    toUserId: luisId,
+    winkId: 'hearts'
+  });
+  assert.equal(newWinkAck.ok, true);
+  assert.equal(newWinkAck.message.winkId, 'hearts');
+  console.log('✓ 11. DM read receipts (✓✓), reply quotes, emoji reactions & new winks OK');
+
+  // 12. Group Chats (create, invite, messages, reply, reactions, wink, nudge, read, leave)
+  const regPedro = await apiReq('/api/auth/register', {
+    method: 'POST',
+    body: {
+      email: 'pedro.grupo@retro.com',
+      password: 'password123',
+      nickname: 'Pedro05'
+    }
+  });
+  assert.equal(regPedro.status, 201);
+  const pedroToken = regPedro.data.token;
+  const pedroId = regPedro.data.user.id;
+  await apiReq('/api/friends/request', {
+    method: 'POST',
+    token: anaToken,
+    body: { email: 'pedro.grupo@retro.com' }
+  });
+  await apiReq('/api/friends/respond', {
+    method: 'POST',
+    token: pedroToken,
+    body: { friendId: anaId, action: 'accept' }
+  });
+  const pedroSocket = await connectClient(pedroToken);
+
+  const createGrp = await apiReq('/api/groups', {
+    method: 'POST',
+    token: anaToken,
+    body: { name: 'Sala Retro 2005', memberIds: [luisId], avatar: '🎧' }
+  });
+  assert.equal(createGrp.status, 201);
+  const groupId = createGrp.data.group.id;
+  assert.equal(createGrp.data.group.members.length, 2);
+
+  // Add Pedro to group
+  const addMem = await apiReq(`/api/groups/${groupId}/members`, {
+    method: 'POST',
+    token: anaToken,
+    body: { memberIds: [pedroId] }
+  });
+  assert.equal(addMem.status, 200);
+  assert.equal(addMem.data.group.members.length, 3);
+
+  // Real-time group message + reply + reaction + wink + nudge
+  const luisGroupMsgPromise = new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('Timeout receive_group_message')), 3000);
+    luisSocket.once('receive_group_message', (msg) => {
+      clearTimeout(t);
+      resolve(msg);
+    });
+  });
+  const gMsgAck = await emitAck(anaSocket, 'send_group_message', {
+    groupId,
+    type: 'text',
+    text: 'Bienvenidos a la sala!'
+  });
+  assert.equal(gMsgAck.ok, true);
+  const luisGotGroupMsg = await luisGroupMsgPromise;
+  assert.equal(luisGotGroupMsg.groupId, groupId);
+
+  const gReplyAck = await emitAck(pedroSocket, 'send_group_message', {
+    groupId,
+    type: 'text',
+    text: 'Gracias Ana!',
+    replyToId: gMsgAck.message.id
+  });
+  assert.equal(gReplyAck.ok, true);
+  assert.equal(gReplyAck.message.replyTo.id, gMsgAck.message.id);
+
+  const gReactAck = await emitAck(luisSocket, 'toggle_reaction', {
+    scope: 'group',
+    messageId: gMsgAck.message.id,
+    emoji: '🔥'
+  });
+  assert.equal(gReactAck.ok, true);
+  assert.equal(gReactAck.reactions[0].emoji, '🔥');
+
+  const gWinkAck = await emitAck(anaSocket, 'send_group_wink', {
+    groupId,
+    winkId: 'party'
+  });
+  assert.equal(gWinkAck.ok, true);
+  assert.equal(gWinkAck.message.winkId, 'party');
+
+  const gNudgeAck = await emitAck(anaSocket, 'send_group_nudge', { groupId });
+  assert.equal(gNudgeAck.ok, true);
+
+  // Unread + mark_group_read (Luis hasn't read any of the 4 messages; Pedro sent msg #2 so wink + nudge = 2 unread)
+  const luisGroupsBefore = await apiReq('/api/groups', { token: luisToken });
+  const luisGroupObj = luisGroupsBefore.data.groups.find((g) => g.id === groupId);
+  assert.equal(luisGroupObj.unreadCount, 4);
+
+  const pedroGroupsBefore = await apiReq('/api/groups', { token: pedroToken });
+  const pedroGroupObj = pedroGroupsBefore.data.groups.find((g) => g.id === groupId);
+  assert.equal(pedroGroupObj.unreadCount, 2);
+
+  await apiReq(`/api/groups/${groupId}/read`, { method: 'POST', token: pedroToken });
+  const pedroGroupsAfter = await apiReq('/api/groups', { token: pedroToken });
+  assert.equal(pedroGroupsAfter.data.groups.find((g) => g.id === groupId).unreadCount, 0);
+
+  // History fetch
+  const gHist = await apiReq(`/api/groups/${groupId}/messages`, { token: luisToken });
+  assert.equal(gHist.status, 200);
+  assert.ok(gHist.data.messages.length >= 4);
+
+  // Leave group & verify access revoked
+  const leaveRes = await apiReq(`/api/groups/${groupId}/leave`, { method: 'POST', token: pedroToken });
+  assert.equal(leaveRes.status, 200);
+  const pedroForbidden = await apiReq(`/api/groups/${groupId}/messages`, { token: pedroToken });
+  assert.equal(pedroForbidden.status, 403);
+  pedroSocket.disconnect();
+  console.log('✓ 12. Group chats (create, invite, messages, reply, reactions, wink, nudge, read, leave) OK');
+
   anaSocket.disconnect();
   luisSocket.disconnect();
   console.log('\nALL PYTHON FASTAPI + SOCKET.IO E2E TESTS PASSED! 🎉');

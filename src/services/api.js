@@ -159,5 +159,34 @@ export const api = {
     return request('/api/push/test', {
       method: 'POST'
     });
+  },
+  getGroups() {
+    return request('/api/groups');
+  },
+  createGroup(name, memberIds, avatar = '💬') {
+    return request('/api/groups', {
+      method: 'POST',
+      body: JSON.stringify({ name, memberIds, avatar })
+    });
+  },
+  addGroupMembers(groupId, memberIds) {
+    return request(`/api/groups/${groupId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ memberIds })
+    });
+  },
+  leaveGroup(groupId) {
+    return request(`/api/groups/${groupId}/leave`, {
+      method: 'POST'
+    });
+  },
+  getGroupMessages(groupId, beforeId = null) {
+    const q = beforeId ? `?before=${beforeId}&limit=30` : '?limit=30';
+    return request(`/api/groups/${groupId}/messages${q}`);
+  },
+  markGroupRead(groupId) {
+    return request(`/api/groups/${groupId}/read`, {
+      method: 'POST'
+    });
   }
 };

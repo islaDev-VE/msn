@@ -987,3 +987,416 @@
   border: 3px solid #ffffff;
   border-radius: 6px;
 }
+
+/* Clickable links in chat */
+.z05-chat-link {
+  color: #0058ee;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.z05-chat-link:hover {
+  color: #003999;
+}
+
+/* Message actions (Reply + Reactions) */
+.z05-msg-item {
+  position: relative;
+}
+
+.z05-msg-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.z05-msg-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.72;
+  transition: opacity 0.15s;
+}
+
+.z05-msg-item:hover .z05-msg-actions,
+.z05-msg-item:focus-within .z05-msg-actions {
+  opacity: 1;
+}
+
+.z05-msg-action-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 1px 4px;
+  font-size: 11px;
+  color: #4a6b96;
+  line-height: 1.2;
+}
+
+.z05-msg-action-btn:hover {
+  background: #e5effc;
+  border-color: #a9c4ea;
+  color: #003999;
+}
+
+.z05-read-receipt {
+  margin-left: 5px;
+  font-size: 11px;
+  font-weight: bold;
+  color: #8899ad;
+}
+
+.z05-read-receipt.is-read {
+  color: #0077ff;
+}
+
+/* Quoted message inside bubble + reply composer bar */
+.z05-msg-quote {
+  border-left: 3px solid #2b73e5;
+  background: #edf4ff;
+  border-radius: 0 4px 4px 0;
+  padding: 4px 8px;
+  margin: 4px 0;
+  font-size: 11px;
+  color: #324b6b;
+}
+
+.z05-msg-quote-author {
+  font-weight: bold;
+  color: #0046ad;
+  margin-bottom: 1px;
+}
+
+.z05-msg-quote-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.z05-reply-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 10px 4px 10px;
+  padding: 5px 8px;
+  background: #e8f1ff;
+  border: 1px solid #9bbcf0;
+  border-left: 3px solid #0058ee;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.z05-reply-bar-content {
+  min-width: 0;
+  flex: 1;
+}
+
+/* Emoji reactions row & picker */
+.z05-msg-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  position: relative;
+}
+
+.z05-reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid #bdd2f0;
+  background: #f2f7ff;
+  font-size: 11px;
+  cursor: pointer;
+  color: #1f3c68;
+}
+
+.z05-reaction-chip:hover {
+  background: #dceaff;
+}
+
+.z05-reaction-chip.is-mine {
+  border-color: #0058ee;
+  background: #d8e8ff;
+  font-weight: bold;
+}
+
+.z05-reaction-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  background: #ffffff;
+  border: 1px solid #7f9db9;
+  border-radius: 14px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.16);
+  margin-top: 4px;
+}
+
+.z05-reaction-pick-btn {
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.z05-reaction-pick-btn:hover {
+  background: #e8f1ff;
+  transform: scale(1.15);
+}
+
+/* Voice preview bar */
+.z05-voice-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 10px 6px 10px;
+  padding: 6px 8px;
+  background: #f2f7ff;
+  border: 1px solid #8eb1e6;
+  border-radius: 4px;
+}
+
+/* Drag and drop overlay in ChatWindow */
+.z05-chat-window {
+  position: relative;
+}
+
+.z05-drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 88, 238, 0.14);
+  border: 3px dashed #0058ee;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.z05-drop-overlay-card {
+  background: #ffffff;
+  border: 2px solid #0058ee;
+  border-radius: 8px;
+  padding: 14px 20px;
+  font-size: 14px;
+  font-weight: bold;
+  color: #0042a8;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+/* Group chats header & modal */
+.z05-group-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.z05-group-members-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.z05-group-member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid #c4d7f2;
+  border-radius: 9px;
+  padding: 0 6px;
+  font-size: 10px;
+  color: #214070;
+}
+
+.z05-group-avatar-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.z05-group-avatar-btn {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #9db8df;
+  background: #f5f9ff;
+  border-radius: 6px;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.z05-group-avatar-btn.is-selected {
+  border: 2px solid #0058ee;
+  background: #dbeaff;
+}
+
+.z05-group-checklist {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #7f9db9;
+  background: #fff;
+  border-radius: 3px;
+  padding: 4px;
+}
+
+.z05-group-check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.z05-group-check-item:hover {
+  background: #f1f6ff;
+}
+
+.z05-group-check-item.is-checked {
+  background: #e1ecff;
+}
+
+.z05-group-check-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Reproductor 05 (Windows Media Player inspired mini player) */
+.z05-player-body {
+  background: linear-gradient(180deg, #e9f1fc 0%, #d4e2f7 100%);
+}
+
+.z05-player-screen {
+  background: linear-gradient(135deg, #0b1b3d 0%, #10326e 55%, #091834 100%);
+  border: 2px solid #486fa8;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #e8f4ff;
+  margin-bottom: 10px;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+.z05-player-eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 36px;
+  margin-bottom: 8px;
+}
+
+.z05-player-eq-bar {
+  flex: 1;
+  background: linear-gradient(180deg, #5ef5ff 0%, #0091ff 60%, #0047ab 100%);
+  border-radius: 2px 2px 0 0;
+  transition: height 0.14s ease;
+  opacity: 0.7;
+}
+
+.z05-player-eq-bar.is-playing {
+  opacity: 1;
+}
+
+.z05-player-track-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.z05-player-track-artist {
+  font-size: 11px;
+  color: #9ecbff;
+  margin-top: 2px;
+}
+
+.z05-player-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.z05-player-buttons {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.z05-player-volume {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.z05-player-volume input[type='range'] {
+  width: 82px;
+}
+
+.z05-player-playlist {
+  background: #ffffff;
+  border: 1px solid #7f9db9;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.z05-player-track-row {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid #e6edf7;
+  background: #ffffff;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.z05-player-track-row:last-child {
+  border-bottom: none;
+}
+
+.z05-player-track-row:hover {
+  background: #eef5ff;
+}
+
+.z05-player-track-row.is-current {
+  background: #dbeaff;
+  font-weight: bold;
+  color: #003e9c;
+}
+
+.z05-player-track-sub {
+  font-size: 10px;
+  color: #5c7499;
+}
+
+.z05-player-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+

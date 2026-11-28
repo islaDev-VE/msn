@@ -31,7 +31,17 @@ export const RETRO_EMOTICONS = [
   { code: '(})', shortcuts: ['(})'], name: 'Abrazo cálido', render: '🤗' },
   { code: '(co)', shortcuts: ['(co)', '(CO)'], name: 'Café', render: '☕' },
   { code: '(mp)', shortcuts: ['(mp)', '(MP)'], name: 'Móvil', render: '📱' },
-  { code: '(brb)', shortcuts: ['(brb)', '(BRB)'], name: 'Vuelvo enseguida', render: '⏳' }
+  { code: '(brb)', shortcuts: ['(brb)', '(BRB)'], name: 'Vuelvo enseguida', render: '⏳' },
+  { code: '(F)', shortcuts: ['(f)', '(F)'], name: 'Rosa roja', render: '🌹' },
+  { code: '(W)', shortcuts: ['(w)', '(W)'], name: 'Rosa marchita', render: '🥀' },
+  { code: '(^)', shortcuts: ['(^)'], name: 'Pastel', render: '🎂' },
+  { code: '(G)', shortcuts: ['(g)', '(G)'], name: 'Regalo', render: '🎁' },
+  { code: '(B)', shortcuts: ['(b)', '(B)'], name: 'Cerveza', render: '🍺' },
+  { code: '(P)', shortcuts: ['(p)', '(P)'], name: 'Cámara', render: '📷' },
+  { code: '(@)', shortcuts: ['(@)'], name: 'Gatito', render: '🐱' },
+  { code: '(&)', shortcuts: ['(&)'], name: 'Perrito', render: '🐶' },
+  { code: '(I)', shortcuts: ['(i)', '(I)'], name: 'Bombilla / Idea', render: '💡' },
+  { code: '(sn)', shortcuts: ['(sn)', '(SN)'], name: 'Caracol', render: '🐌' }
 ];
 
 function escapeRegExp(string) {

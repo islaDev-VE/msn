@@ -4,8 +4,10 @@ import AuthModal from './components/Login/AuthModal';
 import ContactListWindow from './components/ContactList/ContactListWindow';
 import ChatWindow from './components/Chat/ChatWindow';
 import AddFriendModal from './components/ContactList/AddFriendModal';
+import CreateGroupModal from './components/ContactList/CreateGroupModal';
 import AvatarUploadModal from './components/Profile/AvatarUploadModal';
 import AboutModal from './components/Modals/AboutModal';
+import RetroPlayerModal from './components/Player/RetroPlayerModal';
 import ZumbidoLogo from './components/Common/ZumbidoLogo';
 
 import { api, getStoredToken, setStoredToken } from './services/api';
@@ -49,6 +51,18 @@ function getInitialChatFriendId() {
   }
 }
 
+function getInitialGroupId() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('group');
+    const num = raw ? Number(raw) : NaN;
+    return Number.isInteger(num) && num > 0 ? num : null;
+  } catch {
+    return null;
+  }
+}
+
 function clearQueryParamFromUrl(paramName) {
   if (typeof window === 'undefined') return;
   try {
@@ -74,11 +88,21 @@ export default function App() {
   const [connectionState, setConnectionState] = useState('connected');
   const [pendingInviteCode, setPendingInviteCode] = useState(() => getInitialInviteCode());
   const [pendingChatFriendId, setPendingChatFriendId] = useState(() => getInitialChatFriendId());
+  const [pendingGroupId, setPendingGroupId] = useState(() => getInitialGroupId());
 
   // Friends & requests
   const [friends, setFriends] = useState([]);
   const [incomingRequests, setIncomingRequests] = useState([]);
   const [outgoingRequests, setOutgoingRequests] = useState([]);
+
+  // Groups
+  const [groups, setGroups] = useState([]);
+  const [openGroupIds, setOpenGroupIds] = useState([]);
+  const [groupHistories, setGroupHistories] = useState({});
+  const [typingByGroup, setTypingByGroup] = useState({});
+  const [shakeByGroup, setShakeByGroup] = useState({});
+  const [winkByGroup, setWinkByGroup] = useState({});
+  const [cooldownByGroup, setCooldownByGroup] = useState({});
 
   // Open chat friend IDs, per-friend message histories & state
   const [openChatIds, setOpenChatIds] = useState([]);
@@ -97,7 +121,9 @@ export default function App() {
 
   // Modals & notifications
   const [addFriendModalTab, setAddFriendModalTab] = useState(null); // null | 'add' | 'invite'
+  const [groupModalState, setGroupModalState] = useState(null); // null | { mode: 'create' } | { mode: 'invite', group }
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isPlayerOpen, setIsPlayerOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [toasterData, setToasterData] = useState(null);
   const toasterTimerRef = useRef(null);
@@ -128,15 +154,21 @@ export default function App() {
   const minimizedRef = useRef(minimizedWindows);
   const profileRef = useRef(profile);
   const openChatIdsRef = useRef(openChatIds);
+  const openGroupIdsRef = useRef(openGroupIds);
   const friendsRef = useRef(friends);
+  const groupsRef = useRef(groups);
   const chatHistoriesRef = useRef(chatHistories);
+  const groupHistoriesRef = useRef(groupHistories);
 
   useEffect(() => { activeWindowRef.current = activeWindowId; }, [activeWindowId]);
   useEffect(() => { minimizedRef.current = minimizedWindows; }, [minimizedWindows]);
   useEffect(() => { profileRef.current = profile; }, [profile]);
   useEffect(() => { openChatIdsRef.current = openChatIds; }, [openChatIds]);
+  useEffect(() => { openGroupIdsRef.current = openGroupIds; }, [openGroupIds]);
   useEffect(() => { friendsRef.current = friends; }, [friends]);
+  useEffect(() => { groupsRef.current = groups; }, [groups]);
   useEffect(() => { chatHistoriesRef.current = chatHistories; }, [chatHistories]);
+  useEffect(() => { groupHistoriesRef.current = groupHistories; }, [groupHistories]);
 
   // Responsive matchMedia + visualViewport keyboard adaptation
   useEffect(() => {
@@ -166,9 +198,9 @@ export default function App() {
     };
   }, []);
 
-  const showToaster = useCallback((user, text, friendId = null) => {
+  const showToaster = useCallback((user, text, friendId = null, groupId = null) => {
     if (toasterTimerRef.current) clearTimeout(toasterTimerRef.current);
-    setToasterData({ user, text, friendId });
+    setToasterData({ user, text, friendId, groupId });
     toasterTimerRef.current = setTimeout(() => setToasterData(null), 5200);
   }, []);
 
@@ -208,12 +240,14 @@ export default function App() {
       return;
     }
     api.getMe()
-      .then((res) => {
+      .then(async (res) => {
         setProfile(res.user);
-        return api.getFriends();
-      })
-      .then((bundle) => {
+        const [bundle, groupRes] = await Promise.all([
+          api.getFriends(),
+          api.getGroups().catch(() => ({ groups: [] }))
+        ]);
         applyFriendsBundle(bundle);
+        setGroups(groupRes.groups || []);
       })
       .catch(() => {
         setStoredToken(null);
@@ -268,6 +302,48 @@ export default function App() {
     }
   }, []);
 
+  const loadGroupHistory = useCallback(async (groupId, { loadOlder = false } = {}) => {
+    const snapshot = groupHistoriesRef.current[groupId] || { items: [], hasMore: false, loaded: false, loading: false };
+    if (snapshot.loading) return;
+    const beforeId = loadOlder && snapshot.items.length > 0 ? snapshot.items[0].id : null;
+
+    setGroupHistories((prev) => {
+      const current = prev[groupId] || { items: [], hasMore: false, loaded: false, loading: false };
+      return {
+        ...prev,
+        [groupId]: { ...current, loading: true }
+      };
+    });
+
+    try {
+      const res = await api.getGroupMessages(groupId, beforeId);
+      setGroupHistories((prev) => {
+        const current = prev[groupId] || { items: [], hasMore: false, loaded: false, loading: false };
+        const merged = loadOlder ? [...res.messages, ...current.items] : res.messages;
+        const seen = new Set();
+        const unique = merged.filter((m) => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        });
+        return {
+          ...prev,
+          [groupId]: {
+            items: unique,
+            hasMore: res.hasMore,
+            loaded: true,
+            loading: false
+          }
+        };
+      });
+    } catch {
+      setGroupHistories((prev) => ({
+        ...prev,
+        [groupId]: { ...(prev[groupId] || { items: [], hasMore: false }), loaded: true, loading: false }
+      }));
+    }
+  }, []);
+
   const markConversationAsRead = useCallback((friendId) => {
     socketRef.current?.emit('mark_read', { friendId });
     setFriends((prev) =>
@@ -276,9 +352,20 @@ export default function App() {
     setFlashingWindows((prev) => ({ ...prev, [`chat-${friendId}`]: false }));
   }, []);
 
+  const markGroupAsRead = useCallback((groupId) => {
+    socketRef.current?.emit('mark_group_read', { groupId });
+    setGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, unreadCount: 0 } : g))
+    );
+    setFlashingWindows((prev) => ({ ...prev, [`group-${groupId}`]: false }));
+  }, []);
+
   const openChatWithFriend = useCallback((friend) => {
     const fid = friend.id;
     const winId = `chat-${fid}`;
+    if (isMobile) {
+      setOpenGroupIds([]);
+    }
     setOpenChatIds((prev) => {
       if (isMobile) return [fid];
       return prev.includes(fid) ? prev : [...prev, fid];
@@ -287,6 +374,21 @@ export default function App() {
     loadHistory(fid);
     markConversationAsRead(fid);
   }, [focusWindow, isMobile, loadHistory, markConversationAsRead]);
+
+  const openGroupChat = useCallback((group) => {
+    const gid = group.id;
+    const winId = `group-${gid}`;
+    if (isMobile) {
+      setOpenChatIds([]);
+    }
+    setOpenGroupIds((prev) => {
+      if (isMobile) return [gid];
+      return prev.includes(gid) ? prev : [...prev, gid];
+    });
+    focusWindow(winId);
+    loadGroupHistory(gid);
+    markGroupAsRead(gid);
+  }, [focusWindow, isMobile, loadGroupHistory, markGroupAsRead]);
 
   // Connect Socket.io when logged in
   useEffect(() => {
@@ -422,11 +524,18 @@ export default function App() {
       setShakeByFriend((prev) => ({ ...prev, [otherId]: Date.now() }));
     });
 
-    s.on('nudge_cooldown', ({ toUserId, message }) => {
-      setCooldownByFriend((prev) => ({ ...prev, [toUserId]: message }));
-      setTimeout(() => {
-        setCooldownByFriend((prev) => ({ ...prev, [toUserId]: '' }));
-      }, 3500);
+    s.on('nudge_cooldown', ({ toUserId, groupId, message }) => {
+      if (groupId) {
+        setCooldownByGroup((prev) => ({ ...prev, [groupId]: message }));
+        setTimeout(() => {
+          setCooldownByGroup((prev) => ({ ...prev, [groupId]: '' }));
+        }, 3500);
+      } else if (toUserId) {
+        setCooldownByFriend((prev) => ({ ...prev, [toUserId]: message }));
+        setTimeout(() => {
+          setCooldownByFriend((prev) => ({ ...prev, [toUserId]: '' }));
+        }, 3500);
+      }
     });
 
     s.on('receive_wink', (msg) => {
@@ -448,11 +557,162 @@ export default function App() {
       setFlashingWindows((prev) => ({ ...prev, [`chat-${friendId}`]: false }));
     });
 
+    s.on('friend_read_messages', ({ byUserId }) => {
+      const me = profileRef.current;
+      if (!me || !byUserId) return;
+      setChatHistories((prev) => {
+        const curr = prev[byUserId];
+        if (!curr) return prev;
+        return {
+          ...prev,
+          [byUserId]: {
+            ...curr,
+            items: curr.items.map((m) => (m.fromUserId === me.id ? { ...m, read: true } : m))
+          }
+        };
+      });
+    });
+
+    s.on('reaction_updated', ({ scope, messageId, groupId, reactions }) => {
+      if (scope === 'group' && groupId) {
+        setGroupHistories((prev) => {
+          const curr = prev[groupId];
+          if (!curr) return prev;
+          return {
+            ...prev,
+            [groupId]: {
+              ...curr,
+              items: curr.items.map((m) => (m.id === messageId ? { ...m, reactions } : m))
+            }
+          };
+        });
+      } else {
+        setChatHistories((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const fid of Object.keys(next)) {
+            const hist = next[fid];
+            if (hist?.items?.some((m) => m.id === messageId)) {
+              changed = true;
+              next[fid] = {
+                ...hist,
+                items: hist.items.map((m) => (m.id === messageId ? { ...m, reactions } : m))
+              };
+            }
+          }
+          return changed ? next : prev;
+        });
+      }
+    });
+
+    const appendMessageToGroup = (msg, { triggerAlert = true } = {}) => {
+      const me = profileRef.current;
+      if (!me || !msg?.groupId) return;
+      const gid = msg.groupId;
+
+      setGroupHistories((prev) => {
+        const curr = prev[gid] || { items: [], hasMore: false, loaded: false, loading: false };
+        if (curr.items.some((m) => m.id === msg.id)) return prev;
+        return {
+          ...prev,
+          [gid]: { ...curr, items: [...curr.items, msg] }
+        };
+      });
+
+      if (msg.fromUserId !== me.id) {
+        const winId = `group-${gid}`;
+        const isGroupFocused = activeWindowRef.current === winId && !minimizedRef.current[winId] && !document.hidden;
+        if (isGroupFocused) {
+          markGroupAsRead(gid);
+        } else {
+          setGroups((prev) =>
+            prev.map((g) => (g.id === gid ? { ...g, unreadCount: (g.unreadCount || 0) + 1 } : g))
+          );
+          setFlashingWindows((prev) => ({ ...prev, [winId]: true }));
+
+          if (!window.matchMedia('(max-width: 768px)').matches) {
+            setOpenGroupIds((prev) => {
+              if (!prev.includes(gid)) {
+                setMinimizedWindows((mPrev) => ({ ...mPrev, [winId]: true }));
+                return [...prev, gid];
+              }
+              return prev;
+            });
+          }
+
+          if (triggerAlert) {
+            const senderClean = stripPlusTags(msg.fromUser?.nickname || 'Contacto');
+            const previewText =
+              msg.type === 'image' ? `${senderClean} envió una foto 📷`
+                : msg.type === 'voice' ? `${senderClean} envió un clip de voz 🎙️`
+                  : msg.type === 'ink' ? `${senderClean} envió una nota manuscrita ✍️`
+                    : msg.type === 'nudge' ? `¡${senderClean} envió un ZUMBIDO a la sala! ⚡`
+                      : msg.type === 'wink' ? `${senderClean} envió un guiño ✨`
+                        : `${senderClean}: ${msg.text.slice(0, 38)}`;
+
+            showToaster(
+              { ...(msg.fromUser || {}), nickname: `${msg.groupName || 'Sala'}` },
+              previewText,
+              null,
+              gid
+            );
+            sendSystemNotification(`Zumbido 05 — ${msg.groupName || 'Sala grupal'}`, previewText);
+          }
+        }
+      }
+    };
+
+    s.on('groups_refresh', ({ groups: nextGroups }) => {
+      if (Array.isArray(nextGroups)) {
+        setGroups(nextGroups);
+      }
+    });
+
+    s.on('receive_group_message', (msg) => {
+      appendMessageToGroup(msg);
+      if (msg.fromUserId !== profileRef.current?.id) {
+        playMessageSound();
+      }
+    });
+
+    s.on('receive_group_nudge', (msg) => {
+      const me = profileRef.current;
+      appendMessageToGroup(msg);
+      playNudgeSound();
+      if (msg.fromUserId !== me?.id) {
+        vibrateForNudge();
+      }
+      setShakeByGroup((prev) => ({ ...prev, [msg.groupId]: Date.now() }));
+    });
+
+    s.on('receive_group_wink', (msg) => {
+      appendMessageToGroup(msg);
+      setWinkByGroup((prev) => ({
+        ...prev,
+        [msg.groupId]: { winkId: msg.winkId || msg.mediaData || 'laugh', ts: Date.now() }
+      }));
+    });
+
+    s.on('group_typing', ({ groupId, fromUserId, nickname, isTyping }) => {
+      if (!groupId || fromUserId === profileRef.current?.id) return;
+      setTypingByGroup((prev) => {
+        const curr = { ...(prev[groupId] || {}) };
+        if (isTyping) curr[fromUserId] = nickname || 'Alguien';
+        else delete curr[fromUserId];
+        return { ...prev, [groupId]: curr };
+      });
+    });
+
+    s.on('group_read', ({ groupId }) => {
+      setGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, unreadCount: 0 } : g)));
+      setFlashingWindows((prev) => ({ ...prev, [`group-${groupId}`]: false }));
+    });
+
     return () => {
       disconnectSocket();
       socketRef.current = null;
     };
-  }, [token, profile?.id, applyFriendsBundle, markConversationAsRead, sendSystemNotification, showToaster]);
+  }, [token, profile?.id, applyFriendsBundle, markConversationAsRead, markGroupAsRead, sendSystemNotification, showToaster]);
 
   // If user is already logged in (or just logged in via login tab) with ?invite=<code>, accept automatically
   useEffect(() => {
@@ -508,8 +768,12 @@ export default function App() {
       reconnectSocketNow();
       checkServerBuildVersion();
       api.getFriends().then(applyFriendsBundle).catch(() => {});
+      api.getGroups().then((r) => setGroups(r.groups || [])).catch(() => {});
       openChatIdsRef.current.forEach((fid) => {
         loadHistory(fid);
+      });
+      openGroupIdsRef.current.forEach((gid) => {
+        loadGroupHistory(gid);
       });
     };
 
@@ -524,7 +788,7 @@ export default function App() {
       window.removeEventListener('focus', handleResume);
       window.removeEventListener('online', handleResume);
     };
-  }, [token, profile?.id, applyFriendsBundle, loadHistory, checkServerBuildVersion]);
+  }, [token, profile?.id, applyFriendsBundle, loadHistory, loadGroupHistory, checkServerBuildVersion]);
 
   // Sync Web Push subscription status & silently refresh existing subscription on login
   useEffect(() => {
@@ -543,7 +807,7 @@ export default function App() {
     };
   }, [token, profile?.id]);
 
-  // Listen for Service Worker notificationclick -> OPEN_CHAT messages
+  // Listen for Service Worker notificationclick -> OPEN_CHAT / OPEN_GROUP messages
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
     const onSwMessage = (event) => {
@@ -555,11 +819,19 @@ export default function App() {
         } else {
           setPendingChatFriendId(fid);
         }
+      } else if (event.data?.type === 'OPEN_GROUP' && event.data.groupId) {
+        const gid = Number(event.data.groupId);
+        const found = groupsRef.current.find((g) => g.id === gid);
+        if (found) {
+          openGroupChat(found);
+        } else {
+          setPendingGroupId(gid);
+        }
       }
     };
     navigator.serviceWorker.addEventListener('message', onSwMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onSwMessage);
-  }, [openChatWithFriend]);
+  }, [openChatWithFriend, openGroupChat]);
 
   // Open pending chat from ?chat=<friendId> or push click once friends list loads
   useEffect(() => {
@@ -572,6 +844,17 @@ export default function App() {
     }
   }, [pendingChatFriendId, friends, openChatWithFriend]);
 
+  // Open pending group from ?group=<groupId> or push click once groups load
+  useEffect(() => {
+    if (!pendingGroupId || groups.length === 0) return;
+    const target = groups.find((g) => g.id === pendingGroupId);
+    if (target) {
+      setPendingGroupId(null);
+      clearQueryParamFromUrl('group');
+      openGroupChat(target);
+    }
+  }, [pendingGroupId, groups, openGroupChat]);
+
   const handleAuthenticated = (newToken, user, invitedBy = null) => {
     setStoredToken(newToken);
     setToken(newToken);
@@ -583,6 +866,7 @@ export default function App() {
       showToaster(invitedBy, 'ya está en tu lista de contactos por invitación 🎉', invitedBy.id);
     }
     api.getFriends().then(applyFriendsBundle).catch(() => {});
+    api.getGroups().then((r) => setGroups(r.groups || [])).catch(() => {});
   };
 
   const handleLogout = () => {
@@ -594,17 +878,33 @@ export default function App() {
     setToken(null);
     setProfile(null);
     setFriends([]);
+    setGroups([]);
     setIncomingRequests([]);
     setOutgoingRequests([]);
     setOpenChatIds([]);
+    setOpenGroupIds([]);
     setChatHistories({});
+    setGroupHistories({});
     setFlashingWindows({});
+    setIsPlayerOpen(false);
+    setGroupModalState(null);
     setPushMessage('');
   };
 
   const handleUpdateProfile = async (updates) => {
     const res = await api.updateProfile(updates);
     setProfile(res.user);
+  };
+
+  const handleApplySongStatus = async (statusText) => {
+    try {
+      await handleUpdateProfile({ personalMessage: statusText });
+      if (profileRef.current) {
+        showToaster(profileRef.current, `Estado musical actualizado: ${statusText}`);
+      }
+    } catch {
+      // ignore profile update error
+    }
   };
 
   const handleSendFriendRequest = async (email) => {
@@ -641,6 +941,14 @@ export default function App() {
     }, 4200);
   }, []);
 
+  const showGroupNotice = useCallback((groupId, message) => {
+    if (!groupId || !message) return;
+    setCooldownByGroup((prev) => ({ ...prev, [groupId]: message }));
+    setTimeout(() => {
+      setCooldownByGroup((prev) => (prev[groupId] === message ? { ...prev, [groupId]: '' } : prev));
+    }, 4200);
+  }, []);
+
   const handleSendMessage = (payload) => {
     socketRef.current?.emit('send_message', payload, (ack) => {
       if (ack?.error) {
@@ -669,6 +977,60 @@ export default function App() {
     socketRef.current?.emit('typing_status', { toUserId, isTyping });
   };
 
+  const handleToggleReaction = (scope, messageId, emoji) => {
+    socketRef.current?.emit('toggle_reaction', { scope, messageId, emoji });
+  };
+
+  const handleSendGroupMessage = (payload) => {
+    socketRef.current?.emit('send_group_message', payload, (ack) => {
+      if (ack?.error) {
+        showGroupNotice(payload.groupId, ack.error);
+      }
+    });
+  };
+
+  const handleSendGroupNudge = (groupId) => {
+    socketRef.current?.emit('send_group_nudge', { groupId }, (ack) => {
+      if (ack?.error && !ack?.cooldown) {
+        showGroupNotice(groupId, ack.error);
+      }
+    });
+  };
+
+  const handleSendGroupWink = (groupId, winkId) => {
+    socketRef.current?.emit('send_group_wink', { groupId, winkId }, (ack) => {
+      if (ack?.error) {
+        showGroupNotice(groupId, ack.error);
+      }
+    });
+  };
+
+  const handleGroupTypingStatus = (groupId, isTyping) => {
+    socketRef.current?.emit('group_typing_status', { groupId, isTyping });
+  };
+
+  const handleCreateGroup = async (name, memberIds, avatar) => {
+    const res = await api.createGroup(name, memberIds, avatar);
+    if (res?.groups) setGroups(res.groups);
+    if (res?.group) openGroupChat(res.group);
+  };
+
+  const handleAddGroupMembers = async (groupId, memberIds) => {
+    const res = await api.addGroupMembers(groupId, memberIds);
+    if (res?.group) {
+      setGroups((prev) => prev.map((g) => (g.id === groupId ? res.group : g)));
+    }
+  };
+
+  const handleLeaveGroup = async (groupId) => {
+    if (!window.confirm('¿Salir de esta sala grupal?')) return;
+    const res = await api.leaveGroup(groupId);
+    if (res?.groups) setGroups(res.groups);
+    else setGroups((prev) => prev.filter((g) => g.id !== groupId));
+    setOpenGroupIds((prev) => prev.filter((id) => id !== groupId));
+    setFlashingWindows((prev) => ({ ...prev, [`group-${groupId}`]: false }));
+  };
+
   const handleMinimize = (winId) => {
     setMinimizedWindows((prev) => ({ ...prev, [winId]: true }));
     if (activeWindowId === winId) setActiveWindowId(null);
@@ -677,6 +1039,11 @@ export default function App() {
   const handleCloseChat = (friendId) => {
     setOpenChatIds((prev) => prev.filter((id) => id !== friendId));
     setFlashingWindows((prev) => ({ ...prev, [`chat-${friendId}`]: false }));
+  };
+
+  const handleCloseGroupChat = (groupId) => {
+    setOpenGroupIds((prev) => prev.filter((id) => id !== groupId));
+    setFlashingWindows((prev) => ({ ...prev, [`group-${groupId}`]: false }));
   };
 
   const handleInstallPwa = async () => {
@@ -750,7 +1117,9 @@ export default function App() {
   };
 
   const isLoggedIn = Boolean(profile);
-  const totalUnreadCount = friends.reduce((sum, f) => sum + (f.unreadCount || 0), 0);
+  const totalUnreadCount =
+    friends.reduce((sum, f) => sum + (f.unreadCount || 0), 0) +
+    groups.reduce((sum, g) => sum + (g.unreadCount || 0), 0);
 
   // Sync PWA App Icon Badge & browser tab title with unread messages + pending requests
   useEffect(() => {
@@ -779,6 +1148,10 @@ export default function App() {
     .map((fid) => friends.find((f) => f.id === fid))
     .filter(Boolean);
 
+  const openGroups = openGroupIds
+    .map((gid) => groups.find((g) => g.id === gid))
+    .filter(Boolean);
+
   // Build desktop taskbar entries
   const taskbarWindows = [];
   if (isLoggedIn) {
@@ -804,6 +1177,19 @@ export default function App() {
         onMinimize: () => handleMinimize(winId)
       });
     });
+
+    openGroups.forEach((group) => {
+      const winId = `group-${group.id}`;
+      taskbarWindows.push({
+        id: winId,
+        title: group.name,
+        icon: <span>{group.avatar || '👥'}</span>,
+        isMinimized: Boolean(minimizedWindows[winId]),
+        isFlashing: Boolean(flashingWindows[winId]) || ((group.unreadCount || 0) > 0 && activeWindowId !== winId),
+        unreadCount: group.unreadCount || 0,
+        onMinimize: () => handleMinimize(winId)
+      });
+    });
   } else {
     taskbarWindows.push({
       id: 'auth',
@@ -816,7 +1202,7 @@ export default function App() {
     });
   }
 
-  const hasOpenMobileChat = isMobile && openFriends.length > 0;
+  const hasOpenMobileChat = isMobile && (openFriends.length > 0 || openGroups.length > 0);
 
   if (!authReady) {
     return (
@@ -839,6 +1225,10 @@ export default function App() {
           const fid = Number(winId.slice(5));
           loadHistory(fid);
           markConversationAsRead(fid);
+        } else if (winId.startsWith('group-')) {
+          const gid = Number(winId.slice(6));
+          loadGroupHistory(gid);
+          markGroupAsRead(gid);
         }
       }}
       onFocusWindow={(winId) => {
@@ -846,9 +1236,13 @@ export default function App() {
         if (winId.startsWith('chat-')) {
           const fid = Number(winId.slice(5));
           markConversationAsRead(fid);
+        } else if (winId.startsWith('group-')) {
+          const gid = Number(winId.slice(6));
+          markGroupAsRead(gid);
         }
       }}
       onOpenAbout={() => setIsAboutOpen(true)}
+      onOpenPlayer={() => setIsPlayerOpen(true)}
       onLogout={handleLogout}
       isLoggedIn={isLoggedIn}
       userProfile={profile}
@@ -856,7 +1250,10 @@ export default function App() {
       toasterData={toasterData}
       onDismissToaster={() => setToasterData(null)}
       onToasterClick={() => {
-        if (toasterData?.friendId) {
+        if (toasterData?.groupId) {
+          const targetGroup = groups.find((g) => g.id === toasterData.groupId);
+          if (targetGroup) openGroupChat(targetGroup);
+        } else if (toasterData?.friendId) {
           const target = friends.find((f) => f.id === toasterData.friendId);
           if (target) openChatWithFriend(target);
         } else if (incomingRequests.length > 0) {
@@ -941,11 +1338,15 @@ export default function App() {
           profile={profile}
           onUpdateProfile={handleUpdateProfile}
           friends={friends}
+          groups={groups}
           incomingRequests={incomingRequests}
           onOpenChat={openChatWithFriend}
+          onOpenGroupChat={openGroupChat}
+          onOpenCreateGroup={() => setGroupModalState({ mode: 'create' })}
           onOpenAddFriend={() => setAddFriendModalTab('add')}
           onOpenInvite={() => setAddFriendModalTab('invite')}
           onOpenProfileModal={() => setIsProfileModalOpen(true)}
+          onOpenPlayer={() => setIsPlayerOpen(true)}
           onOpenAbout={() => setIsAboutOpen(true)}
           onMoveFriendGroup={handleMoveFriendGroup}
           onToggleBlockFriend={handleToggleBlockFriend}
@@ -970,7 +1371,7 @@ export default function App() {
         />
       )}
 
-      {/* 3. Open Chat Windows */}
+      {/* 3. Open DM Chat Windows */}
       {isLoggedIn &&
         openFriends.map((friend, idx) => {
           const winId = `chat-${friend.id}`;
@@ -979,7 +1380,8 @@ export default function App() {
 
           return (
             <ChatWindow
-              key={friend.id}
+              key={winId}
+              mode="dm"
               contact={friend}
               myProfile={profile}
               messages={hist.items}
@@ -996,6 +1398,7 @@ export default function App() {
               onSendWink={handleSendWink}
               onTypingStatus={handleTypingStatus}
               onMarkRead={markConversationAsRead}
+              onToggleReaction={handleToggleReaction}
               onMinimize={() => handleMinimize(winId)}
               onClose={() => handleCloseChat(friend.id)}
               isFocused={activeWindowId === winId}
@@ -1004,6 +1407,57 @@ export default function App() {
               onFocus={() => {
                 focusWindow(winId);
                 markConversationAsRead(friend.id);
+              }}
+              isMobile={isMobile}
+            />
+          );
+        })}
+
+      {/* 3b. Open Group Chat Windows */}
+      {isLoggedIn &&
+        openGroups.map((group, idx) => {
+          const winId = `group-${group.id}`;
+          if (minimizedWindows[winId]) return null;
+          const hist = groupHistories[group.id] || { items: [], hasMore: false, loading: false };
+          const typingNicks = Object.values(typingByGroup[group.id] || {}).map((n) => stripPlusTags(n));
+          const typingText =
+            typingNicks.length === 1
+              ? `${typingNicks[0]} está escribiendo...`
+              : typingNicks.length > 1
+                ? `${typingNicks.slice(0, 2).join(', ')} están escribiendo...`
+                : '';
+
+          return (
+            <ChatWindow
+              key={winId}
+              mode="group"
+              group={group}
+              myProfile={profile}
+              messages={hist.items}
+              hasMore={hist.hasMore}
+              loadingHistory={hist.loading}
+              onLoadMore={(gid) => loadGroupHistory(gid, { loadOlder: true })}
+              typingText={typingText}
+              shakingToken={shakeByGroup[group.id] || 0}
+              activeWink={winkByGroup[group.id] || null}
+              onClearWink={(gid) => setWinkByGroup((prev) => ({ ...prev, [gid]: null }))}
+              cooldownNotice={cooldownByGroup[group.id] || ''}
+              onSendMessage={handleSendGroupMessage}
+              onSendNudge={handleSendGroupNudge}
+              onSendWink={handleSendGroupWink}
+              onTypingStatus={handleGroupTypingStatus}
+              onMarkRead={markGroupAsRead}
+              onToggleReaction={handleToggleReaction}
+              onInviteGroupMembers={(grp) => setGroupModalState({ mode: 'invite', group: grp })}
+              onLeaveGroup={handleLeaveGroup}
+              onMinimize={() => handleMinimize(winId)}
+              onClose={() => handleCloseGroupChat(group.id)}
+              isFocused={activeWindowId === winId}
+              zIndex={zOrders[winId] || 220 + openFriends.length + idx}
+              cascadeIndex={openFriends.length + idx}
+              onFocus={() => {
+                focusWindow(winId);
+                markGroupAsRead(group.id);
               }}
               isMobile={isMobile}
             />
@@ -1023,12 +1477,31 @@ export default function App() {
         />
       )}
 
+      {/* 4b. Create Group / Invite Members Modal */}
+      {groupModalState && (
+        <CreateGroupModal
+          friends={friends}
+          existingGroup={groupModalState.mode === 'invite' ? groupModalState.group : null}
+          onCreateGroup={handleCreateGroup}
+          onAddMembers={handleAddGroupMembers}
+          onClose={() => setGroupModalState(null)}
+        />
+      )}
+
       {/* 5. Profile, Real Photo & Colores Plus Modal */}
       {isProfileModalOpen && profile && (
         <AvatarUploadModal
           profile={profile}
           onSave={handleUpdateProfile}
           onClose={() => setIsProfileModalOpen(false)}
+        />
+      )}
+
+      {/* 5b. Reproductor 05 Modal */}
+      {isPlayerOpen && (
+        <RetroPlayerModal
+          onClose={() => setIsPlayerOpen(false)}
+          onApplySongStatus={handleApplySongStatus}
         />
       )}
 

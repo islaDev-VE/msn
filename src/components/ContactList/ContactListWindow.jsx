@@ -11,11 +11,15 @@ export default function ContactListWindow({
   profile,
   onUpdateProfile,
   friends = [],
+  groups = [],
   incomingRequests = [],
   onOpenChat,
+  onOpenGroupChat,
+  onOpenCreateGroup,
   onOpenAddFriend,
   onOpenInvite,
   onOpenProfileModal,
+  onOpenPlayer,
   onOpenAbout,
   onMoveFriendGroup,
   onToggleBlockFriend,
@@ -118,6 +122,48 @@ export default function ContactListWindow({
     if (window.confirm(`¿Eliminar a ${stripPlusTags(friend.nickname)} de tu lista de contactos?`)) {
       onRemoveFriend(friend.id);
     }
+  };
+
+  const filteredGroups = groups.filter((g) => {
+    const q = filterQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (g.name || '').toLowerCase().includes(q);
+  });
+
+  const renderGroupRow = (group) => {
+    const onlineCount = (group.members || []).filter((m) => m.isOnline).length;
+    const totalCount = (group.members || []).length;
+    return (
+      <div
+        key={`group-${group.id}`}
+        className="z05-buddy-item"
+        onDoubleClick={() => onOpenGroupChat?.(group)}
+        onClick={() => {
+          if (isMobile) onOpenGroupChat?.(group);
+        }}
+        title={isMobile ? 'Toca para entrar a la sala' : 'Doble clic para abrir sala grupal'}
+      >
+        <div
+          className="z05-buddy-mini-avatar"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, background: '#e7f1ff' }}
+        >
+          {group.avatar || '💬'}
+        </div>
+        <div className="z05-buddy-info">
+          <div className="z05-buddy-nickname">
+            {group.name}
+          </div>
+          <div className="z05-buddy-msg">
+            👥 {onlineCount}/{totalCount} conectados
+          </div>
+        </div>
+        <div className="z05-buddy-actions">
+          {group.unreadCount > 0 && (
+            <span className="z05-pill-badge">{group.unreadCount}</span>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const renderFriendRow = (friend) => (
@@ -333,6 +379,10 @@ export default function ContactListWindow({
         {appUpdateAvailable ? '✨ Actualizar a la nueva versión ahora' : '🔄 Buscar actualización de la app'}
       </button>
 
+      <button type="button" className="c05-btn" style={{ padding: '10px 14px' }} onClick={onOpenPlayer}>
+        🎵 Reproductor 05 (Música y estado)
+      </button>
+
       <button type="button" className="c05-btn" style={{ padding: '10px 14px' }} onClick={onOpenAbout}>
         ℹ️ Desarrollador y Acerca de Zumbido 05
       </button>
@@ -346,8 +396,25 @@ export default function ContactListWindow({
   // Mobile Recent/Unread Chats tab view
   const renderMobileChatsView = () => {
     const sorted = [...friends].sort((a, b) => (b.unreadCount - a.unreadCount) || (Number(b.isOnline) - Number(a.isOnline)));
+    const sortedGroups = [...groups].sort((a, b) => (b.unreadCount || 0) - (a.unreadCount || 0));
     return (
       <div className="z05-buddy-list">
+        <div className="z05-group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>👥 Salas Grupales ({sortedGroups.length})</span>
+          <button
+            type="button"
+            className="z05-quick-btn"
+            style={{ fontSize: 10, padding: '1px 6px' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenCreateGroup?.();
+            }}
+          >
+            ➕ Nueva sala
+          </button>
+        </div>
+        {sortedGroups.length > 0 && sortedGroups.map(renderGroupRow)}
+
         <div className="z05-group-header">💬 Conversaciones ({sorted.length})</div>
         {sorted.length === 0 ? (
           <div style={{ padding: 20, textAlign: 'center', color: '#666' }}>
@@ -415,6 +482,14 @@ export default function ContactListWindow({
             onClick={onOpenProfileModal}
           >
             🖼️
+          </button>
+          <button
+            type="button"
+            className="z05-tab-btn"
+            title="Reproductor 05 (Música y estado)"
+            onClick={onOpenPlayer}
+          >
+            🎵
           </button>
           <button
             type="button"
@@ -501,6 +576,14 @@ export default function ContactListWindow({
                   >
                     <span>✉️ Invitar</span>
                   </button>
+                  <button
+                    type="button"
+                    className="z05-quick-btn"
+                    onClick={onOpenCreateGroup}
+                    title="Crear una sala de chat grupal"
+                  >
+                    <span>👥 Sala</span>
+                  </button>
                 </div>
 
                 <div style={{ display: 'flex', gap: 4 }}>
@@ -526,7 +609,7 @@ export default function ContactListWindow({
                   type="text"
                   className="c05-input"
                   style={{ width: '100%', fontSize: 11, padding: '3px 6px' }}
-                  placeholder="Buscar contacto por apodo, correo o grupo..."
+                  placeholder="Buscar contacto, sala o grupo..."
                   value={filterQuery}
                   onChange={(e) => setFilterQuery(e.target.value)}
                 />
@@ -534,6 +617,33 @@ export default function ContactListWindow({
 
               {/* Buddy List Accordion */}
               <div className="z05-buddy-list">
+                {(groups.length > 0 || filteredGroups.length > 0) && (
+                  <div>
+                    <div
+                      className="z05-group-header"
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                      onClick={() => toggleGroup('salas-grupales')}
+                    >
+                      <span>
+                        <span className={`z05-group-arrow ${collapsedGroups['salas-grupales'] ? 'collapsed' : ''}`}>▼</span>
+                        <span>👥 Salas Grupales ({filteredGroups.length})</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="z05-quick-btn"
+                        style={{ fontSize: 10, padding: '1px 5px' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenCreateGroup?.();
+                        }}
+                      >
+                        ➕ Nueva sala
+                      </button>
+                    </div>
+                    {!collapsedGroups['salas-grupales'] && filteredGroups.map(renderGroupRow)}
+                  </div>
+                )}
+
                 {friends.length === 0 ? (
                   <div style={{ padding: '20px 14px', textAlign: 'center', color: '#555', lineHeight: 1.5 }}>
                     <div style={{ fontSize: 28, marginBottom: 6 }}>👥</div>

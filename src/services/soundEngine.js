@@ -1,8 +1,18 @@
 // Original Procedural 2005 Retro Sound Engine using Web Audio API
 // 100% original melodies & effects, zero external MP3 dependencies
 
+const MUTED_STORAGE_KEY = 'zumbido05_muted';
+
+function readStoredMuted() {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(MUTED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 let audioCtx = null;
-let muted = false;
+let muted = readStoredMuted();
 
 function getAudioContext() {
   if (muted) return null;
@@ -24,6 +34,16 @@ export function initAudio() {
 
 export function setSoundMuted(value) {
   muted = Boolean(value);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(MUTED_STORAGE_KEY, muted ? '1' : '0');
+    }
+  } catch {
+    // ignore storage errors
+  }
+  if (muted) {
+    stopTrackLoop();
+  }
 }
 
 export function isSoundMuted() {
@@ -173,6 +193,61 @@ export function playWinkSound(winkType = 'laugh') {
       osc.start(now + t);
       osc.stop(now + t + 0.09);
     });
+  } else if (winkType === 'hearts') {
+    [523.25, 659.25, 783.99, 987.77, 1046.5].forEach((freq, i) => {
+      const t = i * 0.09;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + t);
+      gain.gain.setValueAtTime(0.0001, now + t);
+      gain.gain.linearRampToValueAtTime(0.2, now + t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.28);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + t);
+      osc.stop(now + t + 0.3);
+    });
+  } else if (winkType === 'party') {
+    [587.33, 739.99, 880, 1174.66, 880, 1174.66].forEach((freq, i) => {
+      const t = i * 0.075;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = i % 2 === 0 ? 'triangle' : 'square';
+      osc.frequency.setValueAtTime(freq, now + t);
+      gain.gain.setValueAtTime(0.14, now + t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.16);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + t);
+      osc.stop(now + t + 0.18);
+    });
+  } else if (winkType === 'lightning') {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(920, now);
+    osc.frequency.exponentialRampToValueAtTime(65, now + 0.42);
+    gain.gain.setValueAtTime(0.26, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.47);
+  } else if (winkType === 'clap') {
+    [0.0, 0.11, 0.22, 0.33, 0.44].forEach((t, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(640 + (i % 2) * 140, now + t);
+      osc.frequency.exponentialRampToValueAtTime(190, now + t + 0.05);
+      gain.gain.setValueAtTime(0.24, now + t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.06);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + t);
+      osc.stop(now + t + 0.07);
+    });
   } else {
     [0.0, 0.1, 0.2, 0.3, 0.42].forEach((t, i) => {
       const osc = ctx.createOscillator();
@@ -255,4 +330,177 @@ export function vibrateForNudge() {
   } catch {
     // ignore unsupported browsers
   }
+}
+
+// ========================
+// REPRODUCTOR 05 SYNTH ENGINE
+// ========================
+
+export const REPRODUCTOR_TRACKS = [
+  {
+    id: 'neon-cyber',
+    title: 'Neon Cybercafé 2005',
+    artist: 'Zumbido Beats',
+    statusText: 'Zumbido Beats - Neon Cybercafé 2005',
+    bpm: 118,
+    wave: 'triangle',
+    notes: [523.25, 659.25, 783.99, 659.25, 880.0, 783.99, 659.25, 587.33],
+    bass: [130.81, 130.81, 164.81, 164.81, 174.61, 174.61, 146.83, 196.0],
+  },
+  {
+    id: 'msn-chill',
+    title: 'Conexión ADSL Nocturna',
+    artist: 'Lo-Fi 2005',
+    statusText: 'Lo-Fi 2005 - Conexión ADSL Nocturna',
+    bpm: 92,
+    wave: 'sine',
+    notes: [440.0, 523.25, 659.25, 587.33, 523.25, 493.88, 440.0, 392.0],
+    bass: [110.0, 110.0, 130.81, 130.81, 146.83, 146.83, 130.81, 98.0],
+  },
+  {
+    id: 'xp-dance',
+    title: 'Eurodance Messenger Mix',
+    artist: 'DJ Zumbido',
+    statusText: 'DJ Zumbido - Eurodance Messenger Mix',
+    bpm: 132,
+    wave: 'sawtooth',
+    notes: [587.33, 587.33, 739.99, 880.0, 739.99, 987.77, 880.0, 739.99],
+    bass: [146.83, 293.66, 146.83, 293.66, 123.47, 246.94, 164.81, 220.0],
+  },
+  {
+    id: 'xp-lounge',
+    title: 'Atardecer Bliss XP',
+    artist: 'Retro Wave',
+    statusText: 'Retro Wave - Atardecer Bliss XP',
+    bpm: 100,
+    wave: 'sine',
+    notes: [659.25, 783.99, 987.77, 880.0, 783.99, 659.25, 587.33, 659.25],
+    bass: [164.81, 164.81, 196.0, 196.0, 146.83, 146.83, 130.81, 146.83],
+  },
+  {
+    id: 'arcade-8bit',
+    title: 'Arcade Break (8-Bit)',
+    artist: 'ChipTune 05',
+    statusText: 'ChipTune 05 - Arcade Break',
+    bpm: 128,
+    wave: 'square',
+    notes: [523.25, 783.99, 1046.5, 783.99, 659.25, 880.0, 987.77, 783.99],
+    bass: [130.81, 196.0, 130.81, 196.0, 174.61, 220.0, 196.0, 146.83],
+  },
+];
+
+let musicState = {
+  isPlaying: false,
+  trackIndex: 0,
+  volume: 0.45,
+  step: 0,
+};
+let musicTimer = null;
+const musicListeners = new Set();
+
+function emitMusicState() {
+  const snapshot = {
+    ...musicState,
+    track: REPRODUCTOR_TRACKS[musicState.trackIndex] || REPRODUCTOR_TRACKS[0],
+  };
+  musicListeners.forEach((cb) => {
+    try {
+      cb(snapshot);
+    } catch {
+      // ignore subscriber errors
+    }
+  });
+}
+
+export function subscribeMusicState(listener) {
+  musicListeners.add(listener);
+  listener({
+    ...musicState,
+    track: REPRODUCTOR_TRACKS[musicState.trackIndex] || REPRODUCTOR_TRACKS[0],
+  });
+  return () => musicListeners.delete(listener);
+}
+
+export function getMusicState() {
+  return {
+    ...musicState,
+    track: REPRODUCTOR_TRACKS[musicState.trackIndex] || REPRODUCTOR_TRACKS[0],
+  };
+}
+
+export function setMusicVolume(vol) {
+  const clamped = Math.max(0, Math.min(1, Number(vol) || 0));
+  musicState = { ...musicState, volume: clamped };
+  emitMusicState();
+}
+
+export function stopTrackLoop() {
+  if (musicTimer) {
+    clearInterval(musicTimer);
+    musicTimer = null;
+  }
+  if (musicState.isPlaying) {
+    musicState = { ...musicState, isPlaying: false };
+    emitMusicState();
+  }
+}
+
+function playMusicStep() {
+  if (muted || !musicState.isPlaying) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  const track = REPRODUCTOR_TRACKS[musicState.trackIndex] || REPRODUCTOR_TRACKS[0];
+  const stepIdx = musicState.step % track.notes.length;
+  const leadFreq = track.notes[stepIdx];
+  const bassFreq = track.bass[stepIdx];
+  const stepSec = 60 / track.bpm / 2;
+  const now = ctx.currentTime;
+  const master = Math.max(0.02, musicState.volume * 0.16);
+
+  // Lead voice
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = track.wave;
+  osc.frequency.setValueAtTime(leadFreq, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.linearRampToValueAtTime(master, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + stepSec * 0.92);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + stepSec);
+
+  // Bass voice
+  const bassOsc = ctx.createOscillator();
+  const bassGain = ctx.createGain();
+  bassOsc.type = 'triangle';
+  bassOsc.frequency.setValueAtTime(bassFreq, now);
+  bassGain.gain.setValueAtTime(0.0001, now);
+  bassGain.gain.linearRampToValueAtTime(master * 0.8, now + 0.015);
+  bassGain.gain.exponentialRampToValueAtTime(0.0001, now + stepSec * 0.9);
+  bassOsc.connect(bassGain);
+  bassGain.connect(ctx.destination);
+  bassOsc.start(now);
+  bassOsc.stop(now + stepSec);
+
+  musicState = { ...musicState, step: (musicState.step + 1) % track.notes.length };
+  emitMusicState();
+}
+
+export function startTrackLoop(trackIndex = musicState.trackIndex) {
+  if (muted) {
+    setSoundMuted(false);
+  }
+  if (musicTimer) {
+    clearInterval(musicTimer);
+    musicTimer = null;
+  }
+  const safeIndex = ((Number(trackIndex) || 0) % REPRODUCTOR_TRACKS.length + REPRODUCTOR_TRACKS.length) % REPRODUCTOR_TRACKS.length;
+  const track = REPRODUCTOR_TRACKS[safeIndex];
+  const intervalMs = Math.max(150, Math.round((60 / track.bpm / 2) * 1000));
+  musicState = { ...musicState, isPlaying: true, trackIndex: safeIndex, step: 0 };
+  emitMusicState();
+  playMusicStep();
+  musicTimer = setInterval(playMusicStep, intervalMs);
 }
